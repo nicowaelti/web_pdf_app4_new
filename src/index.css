@@ -1,0 +1,195 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+/* ReactFlow styles */
+.reactflow-wrapper {
+  flex-grow: 1;
+  height: 100%;
+}
+
+.react-flow__node {
+  padding: 10px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: #222;
+  text-align: center;
+  background: #fff;
+}
+
+.react-flow__node-referenceNode {
+  width: 200px;
+}
+
+.react-flow__node-paperNode {
+  width: 250px;
+}
+
+.react-flow__node-default {
+  border-color: #1a192b;
+  background: #fff;
+}
+
+.react-flow__handle {
+  width: 6px;
+  height: 6px;
+  background: #1a192b;
+}
+
+.react-flow__node.connecting {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.3);
+}
+
+.react-flow__handle:hover {
+  background: #2563eb;
+}
+
+.react-flow__handle.connecting {
+  background: #2563eb;
+}
+
+/* PDF Content Styles */
+.pdf-content {
+  font-family: 'Times New Roman', Times, serif;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  padding: 2rem;
+  background-color: white;
+  color: #1a1a1a;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.pdf-page {
+  position: relative;
+  background: white;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  padding: 3rem;
+  margin-bottom: 2rem;
+  border-radius: 4px;
+}
+
+.pdf-page:last-child {
+  margin-bottom: 0;
+}
+
+.pdf-heading-2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #4a5568;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 2px solid #e2e8f0;
+  padding-bottom: 0.5rem;
+}
+
+.pdf-paragraph {
+  line-height: 1.6;
+  margin: 0;
+  padding: 0.1em 0;
+  position: relative;
+  word-break: break-word;
+}
+
+/* Text selection styles */
+.pdf-content ::selection {
+  background-color: rgba(59, 130, 246, 0.2);
+  color: inherit;
+}
+
+.pdf-content ::-moz-selection {
+  background-color: rgba(59, 130, 246, 0.2);
+  color: inherit;
+}
+
+/* Context menu styles */
+.context-menu {
+  animation: fadeIn 0.15s ease-out;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 0) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 8px) scale(1);
+  }
+}
+
+/* Preserve whitespace for indentation */
+.pdf-paragraph:not(:empty) {
+  white-space: pre-wrap;
+}
+
+/* Add spacing between paragraphs */
+.pdf-paragraph + .pdf-paragraph {
+  margin-top: 0.25em;
+}
+
+/* Custom scrollbar styling */
+.overflow-auto::-webkit-scrollbar {
+  width: 8px;
+}
+
+.overflow-auto::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+.overflow-auto::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+.overflow-auto::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Loading animation */
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* PDF text sizes */
+.pdf-content {
+  font-size: 14px;
+}
+
+@media (min-width: 768px) {
+  .pdf-content {
+    font-size: 16px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .pdf-page {
+    padding: 4rem;
+  }
+}
+
+/* Ensure long words don't overflow */
+.pdf-paragraph {
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  hyphens: auto;
+}
