@@ -643,15 +643,22 @@ function App() {
     
     // Group text items by their vertical position (lines)
     const lines = textContent.items.reduce((acc, item) => {
-      const y = Math.round(viewport.height - item.transform[5]);
+      // More precise y-coordinate calculation
+      const y = Math.round((viewport.height - item.transform[5]) * 100) / 100;
       if (!acc[y]) {
         acc[y] = [];
       }
       acc[y].push({
         text: item.str,
         x: item.transform[4],
+        y: item.transform[5],
+        width: item.width,
+        height: item.height,
+        // More accurate font size calculation using transform matrix
         fontSize: Math.sqrt(item.transform[0] * item.transform[0] + item.transform[1] * item.transform[1]),
         fontFamily: item.fontName,
+        ascent: item.ascent,
+        descent: item.descent,
         bold: item.fontName.toLowerCase().includes('bold'),
         italic: item.fontName.toLowerCase().includes('italic')
       });
@@ -668,17 +675,30 @@ function App() {
 
     return {
       number: pageNum,
-      content: sortedLines.map(line => ({
-        text: line.items.map(item => item.text).join(''),
-        style: {
-          fontSize: `${Math.round(line.items[0].fontSize)}px`,
-          fontFamily: line.items[0].fontFamily.replace('+', ' '),
-          marginLeft: `${Math.round(line.items[0].x / viewport.width * 100)}%`,
-          fontWeight: line.items[0].bold ? 'bold' : 'normal',
-          fontStyle: line.items[0].italic ? 'italic' : 'normal',
-          marginTop: line.items[0].x === 0 ? '0.5em' : '0'
-        }
-      }))
+      content: sortedLines.map((line, lineIndex) => {
+        // Calculate average line height based on font metrics
+        const avgLineHeight = line.items.reduce((sum, item) =>
+          sum + (item.ascent - item.descent), 0) / line.items.length;
+
+        // Calculate line spacing based on vertical position difference with previous line
+        const prevLine = lineIndex > 0 ? sortedLines[lineIndex - 1] : null;
+        const lineSpacing = prevLine ? (line.y - prevLine.y) / avgLineHeight : 1;
+
+        return {
+          text: line.items.map(item => item.text).join(''),
+          style: {
+            fontSize: `${Math.round(line.items[0].fontSize)}px`,
+            fontFamily: line.items[0].fontFamily.replace('+', ' '),
+            marginLeft: `${Math.round(line.items[0].x / viewport.width * 100)}%`,
+            fontWeight: line.items[0].bold ? 'bold' : 'normal',
+            fontStyle: line.items[0].italic ? 'italic' : 'normal',
+            lineHeight: `${Math.max(1.2, lineSpacing)}`,
+            marginTop: lineSpacing > 1.5 ? `${(lineSpacing - 1) * 1}em` : '0',
+            textAlign: 'left',
+            position: 'relative'
+          }
+        };
+      })
     };
   };
 
@@ -840,13 +860,13 @@ function App() {
               </span>
             )}
           </h2>
-          <div className="bg-white p-4 rounded-lg shadow-sm max-h-[calc(100vh-10rem)] overflow-auto">
+          <div className="bg-white p-8 rounded-lg shadow-sm max-h-[calc(100vh-10rem)] overflow-auto">
             {isLoading ? (
               <div className="flex items-center justify-center text-gray-600">
                 <div className="animate-pulse">Loading PDF content...</div>
               </div>
             ) : (
-              <div className="pdf-content">
+              <div className="pdf-content mx-auto">
                 {pdfContent.pages.length === 0 ? (
                   <p>Select a PDF file to view its content here</p>
                 ) : (

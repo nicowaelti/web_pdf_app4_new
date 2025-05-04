@@ -97,13 +97,15 @@ body,
 /* PDF Content Styles */
 .pdf-content {
   font-family: 'Times New Roman', Times, serif;
-  line-height: 1.4;
-  letter-spacing: 0.01em;
+  letter-spacing: normal;
   padding: 2rem;
   background-color: white;
   color: #1a1a1a;
   max-width: 800px;
   margin: 0 auto;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .pdf-page {
@@ -130,11 +132,14 @@ body,
 }
 
 .pdf-paragraph {
-  line-height: 1.6;
   margin: 0;
-  padding: 0.1em 0;
+  padding: 0;
   position: relative;
-  word-break: break-word;
+  word-break: normal;
+  text-align: left;
+  text-indent: 0;
+  font-kerning: normal;
+  hanging-punctuation: first;
 }
 
 /* Text selection styles */
@@ -172,7 +177,7 @@ body,
 
 /* Add spacing between paragraphs */
 .pdf-paragraph + .pdf-paragraph {
-  margin-top: 0.25em;
+  margin-top: 0;
 }
 
 /* Custom scrollbar styling */
