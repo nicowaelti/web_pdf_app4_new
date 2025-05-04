@@ -1,6 +1,53 @@
-import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import React from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { initializeDriver, executeQuery, closeDriver } from './utils/neo4jConnection';
-import ReactFlow, { Background, Controls, addEdge, applyNodeChanges, applyEdgeChanges, Handle, Position } from 'reactflow';
+
+// Utility function to clamp a number between min and max values
+const clamp = (num, min, max) => Math.min(Math.max(num, min), max);
+import Header from './components/Header';
+import ReactFlow, {
+  Background,
+  Controls,
+  addEdge,
+  applyNodeChanges,
+  applyEdgeChanges,
+  Handle,
+  Position,
+  MarkerType
+} from 'reactflow';
+import 'reactflow/dist/style.css';
+import CustomNode from './components/CustomNode';
+import SimpleFloatingEdge from './components/SimpleFloatingEdge';
+
+import './App.css';
+
+// Add styles for custom node
+const styles = `
+.custom-node {
+  padding: 10px;
+  border-radius: 5px;
+  background: white;
+  border: 1px solid #1a192b;
+  min-width: 150px;
+}
+
+.custom-node-content {
+  padding: 8px;
+  text-align: center;
+}
+
+.react-flow__handle {
+  background: #1a192b;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+`;
+
+// Add styles to document
+const styleSheet = document.createElement('style');
+styleSheet.textContent = styles;
+document.head.appendChild(styleSheet);
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf';
 import 'reactflow/dist/style.css';
 import './index.css';
@@ -94,7 +141,12 @@ const nodeTypes = {
   referenceNode: ReferenceNode,
   paperNode: PaperNode,
   topicNode: TopicNode,
-  centralTopicNode: CentralTopicNode
+  centralTopicNode: CentralTopicNode,
+  custom: CustomNode
+};
+
+const edgeTypes = {
+  floating: SimpleFloatingEdge
 };
 
 // Initial states
@@ -331,7 +383,7 @@ function App() {
             id: `edge-${source}-${target}-${Date.now()}-${Math.random()}`,
             source,
             target,
-            type: 'smoothstep',
+            type: 'default',
             animated: true
           };
         });
@@ -373,7 +425,7 @@ function App() {
             id: `edge-${sourceType}-${sourceId}-ref-${refId}-${Date.now()}-${Math.random()}`,
             source: `${sourceType}-${sourceId}`,
             target: `ref-${refId}`,
-            type: 'smoothstep',
+            type: 'default',
             animated: true
           };
         });
@@ -396,7 +448,7 @@ function App() {
                 id: `edge-${sourceId}-${targetId}-${Date.now()}-${Math.random()}`,
                 source: sourceId,
                 target: targetId,
-                type: 'smoothstep',
+                type: 'default',
                 animated: true
               });
             }
@@ -418,7 +470,7 @@ function App() {
                 id: `edge-${sourceId}-${targetId}-${Date.now()}-${Math.random()}`,
                 source: sourceId,
                 target: targetId,
-                type: 'smoothstep',
+                type: 'default',
                 animated: true
               });
             }
@@ -440,17 +492,50 @@ function App() {
     };
   }, []);
 
+  // State management
   const [nodes, setNodes] = useState(initialNodes);
   const [edges, setEdges] = useState(initialEdges);
-  
-  // Memoize nodeTypes to prevent recreation on each render
-  const nodeTypesMemo = useMemo(() => nodeTypes, []);
   const [pdfContent, setPdfContent] = useState({ pages: [] });
+  const [leftWidth, setLeftWidth] = useState(50);
+  const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
   const [selectedText, setSelectedText] = useState('');
+
+  // Refs
+  const dragRef = useRef(null);
   const leftWorkspaceRef = useRef(null);
+  
+  // Handle workspace resizing
+  useEffect(() => {
+    const handleMouseMove = (e) => {
+      if (!isDragging || !dragRef.current) return;
+      const delta = e.clientX - dragRef.current.startX;
+      const containerWidth = document.querySelector('.flex-1.flex.mt-16').offsetWidth;
+      const newWidth = dragRef.current.startWidth + (delta / containerWidth * 100);
+      setLeftWidth(clamp(newWidth, 30, 70)); // Limit width between 30% and 70%
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+      dragRef.current = null;
+    };
+
+    if (isDragging) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isDragging]);
 
   const handleTextSelection = () => {
     const selection = window.getSelection();
@@ -536,7 +621,7 @@ function App() {
           id: `edge-paper-${currentPaperId}-ref-${refId}-${Date.now()}-${Math.random()}`,
           source: `paper-${currentPaperId}`,
           target: `ref-${refId}`,
-          type: 'smoothstep',
+          type: 'default',
           animated: true
         };
         
@@ -693,7 +778,7 @@ function App() {
           id: `edge-paper-${paperId}-ref-${refId}-${Date.now()}-${Math.random()}`,
           source: `paper-${paperId}`,
           target: `ref-${refId}`,
-          type: 'smoothstep',
+          type: 'default',
           animated: true
         };
       });
@@ -732,52 +817,19 @@ function App() {
   }, []);
 
   return (
-    <div className="h-screen flex flex-col">
-      <nav className="bg-gray-800 text-white px-8 py-4 flex justify-between items-center">
-        <div className="text-xl font-bold">Workspace App</div>
-        <div className="flex items-center gap-4">
-          <div className="flex items-center">
-            <span className="mr-2">DB Status:</span>
-            <span className={`px-2 py-1 rounded ${
-              dbStatus === 'connected' ? 'bg-green-500' :
-              dbStatus === 'error' ? 'bg-red-500' :
-              'bg-yellow-500'
-            }`}>
-              {dbStatus}
-            </span>
-          </div>
-          <label className="bg-blue-500 hover:bg-blue-600 px-4 py-2 rounded cursor-pointer transition-colors">
-            <span>Select PDF</span>
-            <input
-              type="file"
-              accept=".pdf"
-              onChange={handleFileUpload}
-              className="hidden"
-            />
-          </label>
-          <button
-            onClick={() => setShowTopicPopup(true)}
-            className="bg-green-600 px-4 py-2 rounded hover:bg-green-700 transition-colors"
-          >
-            New Topic
-          </button>
-          <button
-            onClick={() => setShowCentralTopicPopup(true)}
-            className="bg-orange-500 px-4 py-2 rounded hover:bg-orange-600 transition-colors"
-          >
-            New Central Topic
-          </button>
-          <button className="bg-gray-700 px-4 py-2 rounded hover:bg-gray-600 transition-colors">
-            Menu
-          </button>
-        </div>
-      </nav>
-      
-      <div className="flex-1 flex">
+    <div className="h-screen w-screen flex flex-col overflow-hidden">
+      <Header
+        dbStatus={dbStatus}
+        onFileUpload={handleFileUpload}
+        onNewTopic={() => setShowTopicPopup(true)}
+        onNewCentralTopic={() => setShowCentralTopicPopup(true)}
+      />
+      <div className="flex-1 flex mt-16 w-full">
         {/* Left Workspace */}
-        <div 
+        <div
           ref={leftWorkspaceRef}
-          className="w-1/2 p-4 bg-gray-50 border-r border-gray-200"
+          className="workspace p-6 bg-gray-50"
+          style={{ width: `${leftWidth}%` }}
           onMouseUp={handleTextSelection}
         >
           <h2 className="text-xl font-semibold mb-4 text-gray-800">
@@ -845,15 +897,32 @@ function App() {
           </div>
         )}
 
+        {/* Resizer */}
+        <div
+          className={`workspace-resizer ${isDragging ? 'dragging' : ''}`}
+          onMouseDown={(e) => {
+            setIsDragging(true);
+            dragRef.current = {
+              startX: e.clientX,
+              startWidth: leftWidth
+            };
+          }}
+        />
+
         {/* Right Workspace */}
-        <div className="w-1/2 p-4">
+        <div
+          className="workspace p-6"
+          style={{ width: `${100 - leftWidth}%` }}
+        >
           <h2 className="text-xl font-semibold mb-4 text-gray-800">Flow Workspace</h2>
           <div className="h-[calc(100%-2rem)] border border-gray-200 rounded-lg overflow-hidden bg-gray-50">
             <ReactFlow
               nodes={nodes}
               edges={edges}
-              nodeTypes={nodeTypesMemo}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               fitView
+              defaultEdgeOptions={{ type: 'floating', animated: true }}
               onNodesChange={async (changes) => {
                 // Apply changes to the visual nodes
                 setNodes((nds) => applyNodeChanges(changes, nds));
@@ -1006,7 +1075,7 @@ function App() {
                     id: `edge-${sourceType}-${sourceId}-${targetType}-${targetId}-${Date.now()}-${Math.random()}`,
                     source: params.source,
                     target: params.target,
-                    type: 'smoothstep',
+                    type: 'default',
                     animated: true
                   };
 

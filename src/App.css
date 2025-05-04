@@ -1,8 +1,27 @@
 #root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
   text-align: center;
+}
+
+.workspace-resizer {
+  width: 8px;
+  background-color: #e5e7eb;
+  cursor: col-resize;
+  transition: background-color 0.2s;
+  user-select: none;
+}
+
+.workspace-resizer:hover,
+.workspace-resizer.dragging {
+  background-color: #94a3b8;
+}
+
+.workspace {
+  height: 100%;
+  overflow: hidden;
 }
 
 .logo {

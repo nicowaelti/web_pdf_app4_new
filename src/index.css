@@ -2,6 +2,44 @@
 @tailwind components;
 @tailwind utilities;
 
+.menu-button-pink {
+  @apply fixed right-8 top-4 z-50 !important;
+  background-color: #ec4899 !important;
+  padding: 0.75rem 2rem !important;
+  border-radius: 0.5rem !important;
+  color: white !important;
+  font-weight: 700 !important;
+  font-size: 1.125rem !important;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1) !important;
+  transition: all 300ms ease !important;
+}
+
+.menu-button-pink:hover {
+  background-color: #f472b6 !important;
+  transform: scale(1.05) !important;
+  box-shadow: 0 6px 8px rgba(0, 0, 0, 0.2) !important;
+}
+
+.menu-button {
+  position: fixed !important;
+  top: 1rem !important;
+  right: 2rem !important;
+  background: linear-gradient(to right, #ec4899, #f472b6) !important;
+  color: white !important;
+  padding: 0.75rem 1.5rem !important;
+  border-radius: 0.5rem !important;
+  font-weight: bold !important;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1) !important;
+  transition: all 0.3s ease !important;
+  z-index: 50 !important;
+}
+
+.menu-button:hover {
+  transform: scale(1.05) !important;
+  box-shadow: 0 6px 8px rgba(0, 0, 0, 0.2) !important;
+  background: linear-gradient(to right, #f472b6, #fba4c4) !important;
+}
+
 html,
 body,
 #root {
