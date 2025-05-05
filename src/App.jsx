@@ -115,7 +115,6 @@ const TopicNode = React.memo(({ data }) => (
       backgroundColor: '#f0fdf4',
       border: '2px solid #86efac'
     }}>
-      <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Topic</div>
       <div>{data.label}</div>
     </div>
     <Handle type="source" position={Position.Right} />
@@ -129,7 +128,6 @@ const ReferenceNode = React.memo(({ data }) => (
       ...commonNodeStyle,
       backgroundColor: '#f8f9fa'
     }}>
-      <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Reference</div>
       <div title={data.fullText}>{data.label}</div>
     </div>
     <Handle type="source" position={Position.Right} />
@@ -144,7 +142,6 @@ const PaperNode = React.memo(({ data }) => (
       backgroundColor: '#e3f2fd',
       border: '2px solid #90caf9'
     }}>
-      <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Paper</div>
       <div>{data.label}</div>
     </div>
     <Handle type="source" position={Position.Right} />
@@ -159,9 +156,10 @@ const CentralTopicNode = React.memo(({ data }) => (
       ...commonNodeStyle,
       backgroundColor: '#fff3e0',
       border: '2px solid #ffb74d',
-      padding: '10px'
+      padding: '12px',
+      fontSize: '16px',
+      fontWeight: 'bold'
     }}>
-      <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Central Topic</div>
       <div
         contentEditable
         onBlur={(e) => data.onRename(e.target.textContent)}
