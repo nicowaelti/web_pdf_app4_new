@@ -1,5 +1,6 @@
 import React from 'react';
 import { useState, useCallback, useRef, useEffect } from 'react';
+import EditNodeModal from './components/EditNodeModal';
 import { initializeDriver, executeQuery, closeDriver } from './utils/neo4jConnection';
 
 // Utility function to clamp a number between min and max values
@@ -193,10 +194,64 @@ function App() {
   const [dbStatus, setDbStatus] = useState('connecting');
   const [currentPaperId, setCurrentPaperId] = useState(null);
   const [currentPaperTitle, setCurrentPaperTitle] = useState('');
+  const [editNode, setEditNode] = useState(null);
   const [showTopicPopup, setShowTopicPopup] = useState(false);
   const [showCentralTopicPopup, setShowCentralTopicPopup] = useState(false);
   const [newTopicName, setNewTopicName] = useState('');
   const [newCentralTopicName, setNewCentralTopicName] = useState('');
+
+  const handleUpdateNode = async (formData) => {
+    try {
+      const nodeId = editNode.id.split('-')[1];
+      const nodeType = editNode.type.replace('Node', '');
+      
+      // Update in Neo4j based on node type
+      const label = nodeType === 'paper' ? 'Paper' :
+                   nodeType === 'topic' ? 'Topic' :
+                   nodeType === 'central-topic' ? 'CentralTopic' :
+                   nodeType === 'reference' ? 'ReferencedText' : null;
+
+      if (!label) {
+        throw new Error('Invalid node type');
+      }
+
+      await executeQuery(
+        `
+        MATCH (n:${label})
+        WHERE ID(n) = $nodeId
+        SET n.name = $label
+        ${nodeType === 'reference' ? ', n.text = $fullText' : ''}
+        `,
+        {
+          nodeId: parseInt(nodeId),
+          label: formData.label,
+          ...(nodeType === 'reference' && { fullText: formData.fullText })
+        }
+      );
+
+      // Update in React state
+      setNodes(prevNodes =>
+        prevNodes.map(node => {
+          if (node.id === editNode.id) {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                label: formData.label,
+                ...(nodeType === 'reference' && { fullText: formData.fullText })
+              }
+            };
+          }
+          return node;
+        })
+      );
+
+      setEditNode(null);
+    } catch (error) {
+      console.error('Error updating node:', error);
+      alert('Failed to update node');
+    }
+  };
 
   const handleCreateCentralTopic = async () => {
     if (!newCentralTopicName.trim()) return;
@@ -1041,6 +1096,7 @@ function App() {
               onSelectionChange={onSelectionChange}
               nodesFocusable={true}
               selectNodesOnDrag={false}
+              onNodeDoubleClick={(_, node) => setEditNode(node)}
               onNodesChange={async (changes) => {
                 // Apply changes to the visual nodes while preserving selection and type-specific styles
                 setNodes((nds) => {
@@ -1237,6 +1293,16 @@ function App() {
         </div>
       </div>
 
+      {/* Edit Node Modal */}
+      {editNode && (
+        <EditNodeModal
+          node={editNode}
+          isOpen={true}
+          onClose={() => setEditNode(null)}
+          onSave={handleUpdateNode}
+        />
+      )}
+
       {/* New Topic Popup */}
       {showTopicPopup && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -1316,6 +1382,16 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Edit Node Modal */}
+      {editNode && (
+        <EditNodeModal
+          node={editNode}
+          isOpen={true}
+          onClose={() => setEditNode(null)}
+          onSave={handleUpdateNode}
+        />
       )}
 
       {/* New Central Topic Popup */}
