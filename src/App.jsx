@@ -62,12 +62,48 @@ const getRandomPosition = () => ({
 });
 
 // Define constant styles and node types outside of component
+// Node styling constants
 const commonNodeStyle = {
-  borderRadius: '5px',
-  border: '1px solid #ddd',
+  borderRadius: '3px',
+  padding: '8px 12px',
   fontSize: '12px',
-  width: '100%',
-  height: '100%'
+  minWidth: '120px',
+  maxWidth: '200px',
+  backgroundColor: '#fff',
+  border: '1px solid #ddd',
+  boxShadow: '0 1px 2px rgba(0,0,0,0.1)'
+};
+
+const selectedNodeStyle = {
+  ...commonNodeStyle,
+  border: '2px solid #ff0072',
+  boxShadow: '0 2px 4px rgba(255,0,114,0.2)'
+};
+
+// Node-specific styles
+const paperNodeStyle = {
+  ...commonNodeStyle,
+  backgroundColor: '#e3f2fd',
+  border: '1px solid #90caf9'
+};
+
+const topicNodeStyle = {
+  ...commonNodeStyle,
+  backgroundColor: '#f0fdf4',
+  border: '1px solid #86efac'
+};
+
+const referenceNodeStyle = {
+  ...commonNodeStyle,
+  backgroundColor: '#f8f9fa',
+  border: '1px solid #dee2e6'
+};
+
+const centralTopicNodeStyle = {
+  ...commonNodeStyle,
+  backgroundColor: '#fff3e0',
+  border: '1px solid #ffb74d',
+  minWidth: '150px'
 };
 
 const TopicNode = React.memo(({ data }) => (
@@ -477,7 +513,22 @@ function App() {
           });
         });
 
-        setNodes([...paperNodes, ...topicNodes, ...referenceNodes, ...centralTopicNodes]);
+        // Add selection and type-specific styling to nodes
+        const nodesWithStyle = [...paperNodes, ...topicNodes, ...referenceNodes, ...centralTopicNodes]
+          .map(node => ({
+            ...node,
+            style: selectedNode?.id === node.id
+              ? selectedNodeStyle
+              : node.type === 'paperNode'
+                ? paperNodeStyle
+                : node.type === 'topicNode'
+                  ? topicNodeStyle
+                  : node.type === 'referenceNode'
+                    ? referenceNodeStyle
+                    : centralTopicNodeStyle
+          }));
+        
+        setNodes(nodesWithStyle);
         setEdges([...edges, ...centralEdges, ...topicConnections]);
 
       } catch (error) {
@@ -494,10 +545,54 @@ function App() {
 
   // State management
   const [nodes, setNodes] = useState(initialNodes);
+  
+  // Handle node selection changes
+  const onSelectionChange = useCallback(({ nodes }) => {
+    setSelectedNode(nodes?.[0] || null);
+  }, []);
   const [edges, setEdges] = useState(initialEdges);
   const [pdfContent, setPdfContent] = useState({ pages: [] });
   const [leftWidth, setLeftWidth] = useState(50);
   const [isDragging, setIsDragging] = useState(false);
+  const [selectedNode, setSelectedNode] = useState(null);
+
+  // Handle keyboard events for node deletion
+  useEffect(() => {
+    const handleKeyDown = async (event) => {
+      if (selectedNode && (event.key === 'Delete' || event.key === 'Backspace')) {
+        event.preventDefault();
+
+        try {
+          // Delete node from Neo4j based on type
+          const nodeId = selectedNode.id.split('-')[1];
+          
+          await executeQuery(
+            `
+            MATCH (n)
+            WHERE ID(n) = $nodeId
+            DETACH DELETE n
+            `,
+            { nodeId: parseInt(nodeId) }
+          );
+
+          // Remove node and its connected edges from state
+          setNodes(nodes => nodes.filter(node => node.id !== selectedNode.id));
+          setEdges(edges => edges.filter(edge =>
+            edge.source !== selectedNode.id && edge.target !== selectedNode.id
+          ));
+          
+          setSelectedNode(null);
+        } catch (error) {
+          console.error('Error deleting node:', error);
+          alert('Failed to delete node');
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedNode]);
+
   const [isLoading, setIsLoading] = useState(false);
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
@@ -943,9 +1038,26 @@ function App() {
               edgeTypes={edgeTypes}
               fitView
               defaultEdgeOptions={{ type: 'floating', animated: true }}
+              onSelectionChange={onSelectionChange}
+              nodesFocusable={true}
+              selectNodesOnDrag={false}
               onNodesChange={async (changes) => {
-                // Apply changes to the visual nodes
-                setNodes((nds) => applyNodeChanges(changes, nds));
+                // Apply changes to the visual nodes while preserving selection and type-specific styles
+                setNodes((nds) => {
+                  const updatedNodes = applyNodeChanges(changes, nds);
+                  return updatedNodes.map(node => ({
+                    ...node,
+                    style: selectedNode?.id === node.id
+                      ? selectedNodeStyle
+                      : node.type === 'paperNode'
+                        ? paperNodeStyle
+                        : node.type === 'topicNode'
+                          ? topicNodeStyle
+                          : node.type === 'referenceNode'
+                            ? referenceNodeStyle
+                            : centralTopicNodeStyle
+                  }));
+                });
                 
                 // Update positions in Neo4j for moved nodes
                 const positionChanges = changes.filter(change =>
