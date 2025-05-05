@@ -25,7 +25,7 @@ import './App.css';
 // Add styles for custom node
 const styles = `
 .custom-node {
-  padding: 10px;
+  padding: 6px;
   border-radius: 5px;
   background: white;
   border: 1px solid #1a192b;
@@ -33,7 +33,7 @@ const styles = `
 }
 
 .custom-node-content {
-  padding: 8px;
+  padding: 4px;
   text-align: center;
 }
 
@@ -66,7 +66,7 @@ const getRandomPosition = () => ({
 // Node styling constants
 const commonNodeStyle = {
   borderRadius: '3px',
-  padding: '8px 12px',
+  padding: '6px 8px',
   fontSize: '12px',
   minWidth: '120px',
   maxWidth: '200px',
@@ -156,7 +156,7 @@ const CentralTopicNode = React.memo(({ data }) => (
       ...commonNodeStyle,
       backgroundColor: '#fff3e0',
       border: '2px solid #ffb74d',
-      padding: '12px',
+      padding: '8px',
       fontSize: '16px',
       fontWeight: 'bold'
     }}>

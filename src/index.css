@@ -1,4 +1,4 @@
-@tailwind base;
+ @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
@@ -45,6 +45,21 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  overflow-x: visible;
+}
+
+.pdf-content-container {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: visible;
+}
+
+*, *::before, *::after {
+  box-sizing: inherit;
 }
 
 /* ReactFlow styles */
@@ -94,28 +109,64 @@ body,
   background: #2563eb;
 }
 
-/* PDF Content Styles */
-.pdf-content {
-  font-family: 'Times New Roman', Times, serif;
-  letter-spacing: normal;
-  padding: 2rem;
-  background-color: white;
-  color: #1a1a1a;
-  max-width: 800px;
-  margin: 0 auto;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+/* Reset all spacing */
+html, body {
+  margin: 0;
+  padding: 0;
 }
 
-.pdf-page {
-  position: relative;
+/* Container */
+.pdf-content {
+  font-family: 'Times New Roman', Times, serif;
   background: white;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  padding: 3rem;
-  margin-bottom: 2rem;
-  border-radius: 4px;
+  color: #1a1a1a;
+  width: 800px;
+  display: flow-root;
+  padding: 0;
+  margin: 0;
+  overflow: visible;
 }
+
+/* Page styling */
+.pdf-page {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background: white;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  position: relative;
+  left: 0;
+}
+
+/* Page content */
+.pdf-page {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Direct text content */
+.pdf-page > *,
+.pdf-page-number,
+.pdf-paragraph {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  text-indent: 0;
+}
+
+/* Force BFC for all content */
+.pdf-content,
+.pdf-page,
+.pdf-page-number,
+.pdf-paragraph {
+  position: relative;
+  contain: layout paint;
+}
+
 
 .pdf-page:last-child {
   margin-bottom: 0;
@@ -123,24 +174,39 @@ body,
 
 .pdf-heading-2 {
   font-size: 1.1rem;
-  font-weight: 600;
-  color: #4a5568;
+  font-weight: 800;
+  color: #1a202c;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border-bottom: 2px solid #e2e8f0;
-  padding-bottom: 0.5rem;
+  letter-spacing: 0.06em;
+  padding: 0;
+  margin: 1.25em 0 0 0;
+  width: 100%;
+  position: relative;
+  padding-bottom: 0.4em;
 }
 
-.pdf-paragraph {
-  margin: 0;
-  padding: 0;
-  position: relative;
-  word-break: normal;
-  text-align: left;
-  text-indent: 0;
-  font-kerning: normal;
-  hanging-punctuation: first;
+/* Add bottom border with gap */
+.pdf-heading-2::after {
+  content: '';
+  display: block;
+  width: 100%;
+  height: 2px;
+  background: #4a5568;
+  position: absolute;
+  bottom: 0;
+  left: 0;
 }
+
+/* Special spacing for first header */
+.pdf-page > .pdf-heading-2:first-child {
+  margin-top: 1em;
+}
+
+/* Add extra space after headers */
+.pdf-heading-2 + .pdf-paragraph {
+  margin-top: 0.5em;
+}
+
 
 /* Text selection styles */
 .pdf-content ::selection {
@@ -155,34 +221,59 @@ body,
 
 /* Context menu styles */
 .context-menu {
-  animation: fadeIn 0.15s ease-out;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  animation: fadeIn 0.1s ease-out;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 @keyframes fadeIn {
   from {
     opacity: 0;
-    transform: translate(-50%, 0) scale(0.95);
+    transform: translate(-50%, 0) scale(0.98);
   }
   to {
     opacity: 1;
-    transform: translate(-50%, 8px) scale(1);
+    transform: translate(-50%, 4px) scale(1);
   }
 }
 
-/* Preserve whitespace for indentation */
+/* Base text styles */
 .pdf-paragraph:not(:empty) {
   white-space: pre-wrap;
+  text-indent: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
 }
 
-/* Add spacing between paragraphs */
+/* Reset any potential parent-induced spacing */
+.pdf-content * {
+  text-indent: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Spacing adjustments */
 .pdf-paragraph + .pdf-paragraph {
-  margin-top: 0;
+  margin-top: 0.12em;
+}
+
+/* Space between header and content */
+.pdf-heading-2 + * {
+  margin-top: 0.6em;
+}
+
+/* First header in page */
+.pdf-page > .pdf-heading-2:first-child {
+  margin-top: 0.6em;
+}
+
+/* Last paragraph before header */
+.pdf-paragraph + .pdf-heading-2 {
+  margin-top: 1.25em;
 }
 
 /* Custom scrollbar styling */
 .overflow-auto::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
 }
 
 .overflow-auto::-webkit-scrollbar-track {
@@ -215,24 +306,19 @@ body,
 
 /* PDF text sizes */
 .pdf-content {
-  font-size: 14px;
+  font-size: 13px;
 }
 
 @media (min-width: 768px) {
   .pdf-content {
-    font-size: 16px;
+    font-size: 14px;
   }
 }
 
 @media (min-width: 1024px) {
   .pdf-page {
-    padding: 4rem;
+    padding: 0;
   }
 }
 
 /* Ensure long words don't overflow */
-.pdf-paragraph {
-  overflow-wrap: break-word;
-  word-wrap: break-word;
-  hyphens: auto;
-}
