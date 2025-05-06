@@ -1,6 +1,6 @@
 import React from 'react';
 
-const Header = ({ dbStatus, onFileUpload, onNewTopic, onNewCentralTopic }) => {
+const Header = ({ dbStatus, onFileUpload, onNewTopic, onNewCentralTopic, showImportantPapers, onToggleImportantPapers }) => {
   return (
     <nav className="fixed top-0 left-0 right-0 bg-gray-800 text-white py-2 px-4 z-50">
       <div className="flex items-center justify-between max-w-7xl mx-auto">
@@ -38,6 +38,12 @@ const Header = ({ dbStatus, onFileUpload, onNewTopic, onNewCentralTopic }) => {
             className="bg-orange-500 px-3 py-1.5 rounded hover:bg-orange-600 transition-colors"
           >
             New Central Topic
+          </button>
+          <button
+            onClick={onToggleImportantPapers}
+            className="bg-yellow-500 px-3 py-1.5 rounded hover:bg-yellow-600 transition-colors"
+          >
+            {showImportantPapers ? 'Show All Papers' : 'Important Papers'}
           </button>
           <button
             className="px-4 py-1.5 bg-pink-500 hover:bg-pink-400 text-white font-bold rounded-lg

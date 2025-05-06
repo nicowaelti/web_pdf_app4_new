@@ -64,11 +64,34 @@ try {
   console.error('Error initializing PDF.js worker:', error);
 }
 
-// Helper function for random positioning
+// Helper functions for positioning and value conversion
 const getRandomPosition = () => ({
   x: Math.random() * 400 + 100,
   y: Math.random() * 400 + 100
 });
+
+const safeGetPosition = (node, defaultPosition) => {
+  try {
+    const x = node.get('positionX');
+    const y = node.get('positionY');
+    return {
+      x: typeof x === 'number' ? x : defaultPosition.x,
+      y: typeof y === 'number' ? y : defaultPosition.y
+    };
+  } catch (error) {
+    console.warn('Error getting position:', error);
+    return defaultPosition;
+  }
+};
+
+const safeConvertNeoInt = (value, defaultValue = 0) => {
+  try {
+    return typeof value?.toNumber === 'function' ? value.toNumber() : Number(value) || defaultValue;
+  } catch (error) {
+    console.warn('Error converting Neo4j integer:', error);
+    return defaultValue;
+  }
+};
 
 // Define constant styles and node types outside of component
 // Node styling constants
@@ -151,6 +174,16 @@ const PaperNode = React.memo(({ data }) => (
       border: '2px solid #90caf9'
     }}>
       <div>{data.label}</div>
+      {data.importance > 0 && (
+        <div style={{ fontSize: '0.8em', color: '#666' }}>
+          Importance: {data.importance}/10
+        </div>
+      )}
+      {data.notes && (
+        <div style={{ fontSize: '0.8em', color: '#666', marginTop: '4px' }}>
+          Notes: {data.notes}
+        </div>
+      )}
     </div>
     <Handle type="source" position={Position.Right} />
   </>
@@ -197,6 +230,13 @@ const initialNodes = [];
 const initialEdges = [];
 
 function App() {
+  // Basic state for node management
+  const [nodes, setNodes] = useState(initialNodes);
+  const [edges, setEdges] = useState(initialEdges);
+  const [selectedNode, setSelectedNode] = useState(null);
+
+  // UI state
+  const [showImportantPapers, setShowImportantPapers] = useState(false);
   const [dbStatus, setDbStatus] = useState('connecting');
   const [currentPaperId, setCurrentPaperId] = useState(null);
   const [currentPaperTitle, setCurrentPaperTitle] = useState('');
@@ -205,6 +245,11 @@ function App() {
   const [showCentralTopicPopup, setShowCentralTopicPopup] = useState(false);
   const [newTopicName, setNewTopicName] = useState('');
   const [newCentralTopicName, setNewCentralTopicName] = useState('');
+
+  // Workspace state
+  const [isDragging, setIsDragging] = useState(false);
+  const [leftWidth, setLeftWidth] = useState(50);
+  const [pdfContent, setPdfContent] = useState({ pages: [] });
 
   const handleUpdateNode = async (formData) => {
     try {
@@ -227,11 +272,16 @@ function App() {
         WHERE ID(n) = $nodeId
         SET n.name = $label
         ${nodeType === 'reference' ? ', n.text = $fullText' : ''}
+        ${nodeType === 'paper' ? ', n.importance = $importance, n.notes = $notes' : ''}
         `,
         {
           nodeId: parseInt(nodeId),
           label: formData.label,
-          ...(nodeType === 'reference' && { fullText: formData.fullText })
+          ...(nodeType === 'reference' && { fullText: formData.fullText }),
+          ...(nodeType === 'paper' && {
+            importance: parseInt(formData.importance || 0),
+            notes: formData.notes || ''
+          })
         }
       );
 
@@ -244,7 +294,11 @@ function App() {
               data: {
                 ...node.data,
                 label: formData.label,
-                ...(nodeType === 'reference' && { fullText: formData.fullText })
+                ...(nodeType === 'reference' && { fullText: formData.fullText }),
+                ...(nodeType === 'paper' && {
+                  importance: parseInt(formData.importance || 0),
+                  notes: formData.notes || ''
+                })
               }
             };
           }
@@ -299,7 +353,7 @@ function App() {
               );
               setNodes(prev =>
                 prev.map(node =>
-                  node.id === `central-topic-${topicId}`
+                  node.id === `central-topic-${safeConvertNeoInt(topicId)}`
                     ? { ...node, data: { ...node.data, label: newName } }
                     : node
                 )
@@ -325,8 +379,11 @@ function App() {
   useEffect(() => {
     const initAndLoadData = async () => {
       try {
+        console.log('Initializing Neo4j connection...');
         await initializeDriver();
         console.log('Successfully connected to Neo4j');
+        
+        console.log('Loading central topics...');
         setDbStatus('connected');
         
         // Load all central topics and their connections
@@ -350,18 +407,17 @@ function App() {
         `);
 
         const centralTopicNodes = centralTopics.map(topic => {
-          const position = {
-            x: typeof topic.get('positionX') === 'number' ? topic.get('positionX') : getRandomPosition().x,
-            y: typeof topic.get('positionY') === 'number' ? topic.get('positionY') : getRandomPosition().y
-          };
-          const topicId = topic.get('topicId').toNumber();
+          const defaultPos = getRandomPosition();
+          const position = safeGetPosition(topic, defaultPos);
+          const idValue = safeConvertNeoInt(topic.get('topicId'));
           return {
-            id: `central-topic-${topicId}`,
+            id: `central-topic-${idValue}`,
             type: 'centralTopicNode',
             position,
             data: {
-              label: topic.get('name'),
+              label: topic.get('name') || '',
               onRename: async (newName) => {
+                const nodeId = idValue; // Capture the ID in closure
                 try {
                   await executeQuery(
                     `
@@ -369,11 +425,11 @@ function App() {
                     WHERE ID(ct) = $topicId
                     SET ct.name = $newName
                     `,
-                    { topicId, newName }
+                    { topicId: nodeId, newName }
                   );
                   setNodes(prev =>
                     prev.map(node =>
-                      node.id === `central-topic-${topicId}`
+                      node.id === `central-topic-${nodeId}`
                         ? { ...node, data: { ...node.data, label: newName } }
                         : node
                     )
@@ -387,6 +443,9 @@ function App() {
           };
         });
         
+        console.log('Central topics loaded:', centralTopicNodes);
+
+        console.log('Loading papers...');
         // Load all papers and their references
         const papers = await executeQuery(`
           MATCH (p:Paper)
@@ -394,22 +453,36 @@ function App() {
             ID(p) as paperId,
             p.title as title,
             toFloat(p.positionX) as positionX,
-            toFloat(p.positionY) as positionY
+            toFloat(p.positionY) as positionY,
+            p.importance as importance,
+            p.notes as notes
         `);
         
         // Load papers with their positions
         const paperNodes = papers.map(paper => {
-          const position = {
-            x: typeof paper.get('positionX') === 'number' ? paper.get('positionX') : getRandomPosition().x,
-            y: typeof paper.get('positionY') === 'number' ? paper.get('positionY') : getRandomPosition().y
-          };
+          const defaultPos = getRandomPosition();
+          const position = safeGetPosition(paper, defaultPos);
+          const importance = paper.get('importance');
+          // Handle importance value which might be a number or Neo4j Integer
+          const importanceValue = importance ?
+            (typeof importance.toNumber === 'function' ? importance.toNumber() : Number(importance)) : 0;
+          
+          const idValue = safeConvertNeoInt(paper.get('paperId'));
+
           return {
-            id: `paper-${paper.get('paperId').toNumber()}`,
+            id: `paper-${idValue}`,
             type: 'paperNode',
             position: position,
-            data: { label: paper.get('title') }
+            data: {
+              label: paper.get('title'),
+              importance: importanceValue,
+              notes: paper.get('notes') || ''
+            }
           };
         });
+
+      console.log('Papers loaded:', paperNodes);
+      console.log('Loading topics...');
 
         // Load all topics and their connections
         const topics = await executeQuery(`
@@ -432,17 +505,18 @@ function App() {
         `);
 
         const topicNodes = topics.map(topic => {
-          const position = {
-            x: typeof topic.get('positionX') === 'number' ? topic.get('positionX') : getRandomPosition().x,
-            y: typeof topic.get('positionY') === 'number' ? topic.get('positionY') : getRandomPosition().y
-          };
+          const defaultPos = getRandomPosition();
+          const position = safeGetPosition(topic, defaultPos);
           return {
-            id: `topic-${topic.get('topicId').toNumber()}`,
+            id: `topic-${safeConvertNeoInt(topic.get('topicId'))}`,
             type: 'topicNode',
             position: position,
-            data: { label: topic.get('name') }
+            data: { label: topic.get('name') || '' }
           };
         });
+
+      console.log('Topics loaded:', topicNodes);
+      console.log('Loading references...');
 
         // Load all connections
         const centralConnections = await executeQuery(`
@@ -513,6 +587,7 @@ function App() {
             }
           };
         });
+      console.log('References loaded:', referenceNodes);
 
         const edges = references.map(ref => {
           const sourceType = ref.get('sourceType');
@@ -575,22 +650,32 @@ function App() {
         });
 
         // Add selection and type-specific styling to nodes
-        const nodesWithStyle = [...paperNodes, ...topicNodes, ...referenceNodes, ...centralTopicNodes]
-          .map(node => ({
-            ...node,
-            style: selectedNode?.id === node.id
-              ? selectedNodeStyle
-              : node.type === 'paperNode'
-                ? paperNodeStyle
-                : node.type === 'topicNode'
-                  ? topicNodeStyle
-                  : node.type === 'referenceNode'
-                    ? referenceNodeStyle
-                    : centralTopicNodeStyle
-          }));
+        const baseNodes = [
+          ...paperNodes,
+          ...topicNodes,
+          ...(referenceNodes || []),
+          ...centralTopicNodes
+        ];
+
+        console.log('All nodes loaded, combining:', {
+          paperNodes: paperNodes.length,
+          topicNodes: topicNodes.length,
+          referenceNodes: referenceNodes?.length || 0,
+          centralTopicNodes: centralTopicNodes.length
+        });
+
+        // Set nodes without styles initially
+        setNodes(baseNodes);
         
-        setNodes(nodesWithStyle);
-        setEdges([...edges, ...centralEdges, ...topicConnections]);
+        
+        const allEdges = [
+          ...(edges || []),
+          ...(centralEdges || []),
+          ...(topicConnections || [])
+        ].filter(edge => edge && edge.source && edge.target);
+        
+        console.log('Setting edges:', allEdges);
+        setEdges(allEdges);
 
       } catch (error) {
         console.error('Failed to connect to Neo4j:', error);
@@ -602,20 +687,54 @@ function App() {
     return () => {
       closeDriver();
     };
+  }, []); // Only run on initial mount
+
+  // Apply styles to nodes
+  const getNodeStyle = useCallback((nodeType) => {
+    switch (nodeType) {
+      case 'paperNode':
+        return paperNodeStyle;
+      case 'topicNode':
+        return topicNodeStyle;
+      case 'referenceNode':
+        return referenceNodeStyle;
+      case 'centralTopicNode':
+        return centralTopicNodeStyle;
+      default:
+        return commonNodeStyle;
+    }
   }, []);
 
-  // State management
-  const [nodes, setNodes] = useState(initialNodes);
-  
+  useEffect(() => {
+    if (!nodes) return;
+    console.log('Applying styles to nodes:', nodes);
+    
+    const nodesWithStyle = nodes.map(node => {
+      // Skip if node already has style
+      if (node.style) return node;
+      
+      return {
+        ...node,
+        style: getNodeStyle(node.type)
+      };
+    });
+
+    // Only update if styles have changed
+    const hasStyleChanges = nodesWithStyle.some(
+      (node, index) => !nodes[index]?.style ||
+        JSON.stringify(nodes[index].style) !== JSON.stringify(node.style)
+    );
+
+    if (hasStyleChanges) {
+      console.log('Updating node styles');
+      setNodes(nodesWithStyle);
+    }
+  }, [nodes, getNodeStyle]); // Update styles when nodes change or style getter changes
+
   // Handle node selection changes
   const onSelectionChange = useCallback(({ nodes }) => {
     setSelectedNode(nodes?.[0] || null);
   }, []);
-  const [edges, setEdges] = useState(initialEdges);
-  const [pdfContent, setPdfContent] = useState({ pages: [] });
-  const [leftWidth, setLeftWidth] = useState(50);
-  const [isDragging, setIsDragging] = useState(false);
-  const [selectedNode, setSelectedNode] = useState(null);
 
   // Handle keyboard events for node deletion
   useEffect(() => {
@@ -1009,6 +1128,8 @@ function App() {
         onFileUpload={handleFileUpload}
         onNewTopic={() => setShowTopicPopup(true)}
         onNewCentralTopic={() => setShowCentralTopicPopup(true)}
+        showImportantPapers={showImportantPapers}
+        onToggleImportantPapers={() => setShowImportantPapers(!showImportantPapers)}
       />
       <div className="flex-1 flex mt-16 w-full">
         {/* Left Workspace */}
@@ -1109,7 +1230,14 @@ function App() {
           <h2 className="text-xl font-semibold mb-4 text-gray-800">Flow Workspace</h2>
           <div className="h-[calc(100%-2rem)] border border-gray-200 rounded-lg overflow-hidden bg-gray-50">
             <ReactFlow
-              nodes={nodes}
+              nodes={nodes && (showImportantPapers
+                ? nodes.filter(node =>
+                    !node ||
+                    node.type !== 'paperNode' ||
+                    (node.data?.importance && node.data.importance >= 7)
+                  )
+                : nodes)
+              }
               edges={edges}
               nodeTypes={nodeTypes}
               edgeTypes={edgeTypes}
@@ -1188,17 +1316,23 @@ function App() {
                   
                   if (label) {
                     try {
+                      const existingNode = nodes.find(n => n.id === change.id);
                       await executeQuery(
                         `
                         MATCH (n:${label})
                         WHERE ID(n) = $nodeId
                         SET n.positionX = $positionX,
                             n.positionY = $positionY
+                            ${label === 'Paper' ? ', n.importance = $importance, n.notes = $notes' : ''}
                         `,
                         {
                           nodeId: parseInt(nodeId),
                           positionX: change.position.x,
-                          positionY: change.position.y
+                          positionY: change.position.y,
+                          ...(label === 'Paper' && {
+                            importance: existingNode?.data?.importance || 0,
+                            notes: existingNode?.data?.notes || ''
+                          })
                         }
                       );
                     } catch (error) {

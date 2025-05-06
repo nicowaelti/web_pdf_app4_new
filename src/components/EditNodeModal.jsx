@@ -10,6 +10,10 @@ const EditNodeModal = ({ node, isOpen, onClose, onSave }) => {
     // Add more fields based on node type
     ...(node?.type === 'referenceNode' && {
       fullText: node?.data?.fullText || ''
+    }),
+    ...(node?.type === 'paperNode' && {
+      importance: node?.data?.importance || 0,
+      notes: node?.data?.notes || ''
     })
   });
 
@@ -75,6 +79,39 @@ const EditNodeModal = ({ node, isOpen, onClose, onSave }) => {
               rows={4}
             />
           </div>
+        )}
+
+        {node?.type === 'paperNode' && (
+          <>
+            <div>
+              <label htmlFor="importance" className="block text-sm font-medium text-gray-700">
+                Importance (1-10)
+              </label>
+              <input
+                type="number"
+                id="importance"
+                name="importance"
+                min="0"
+                max="10"
+                value={formData.importance}
+                onChange={(e) => setFormData(prev => ({ ...prev, importance: Math.max(0, Math.min(10, parseInt(e.target.value) || 0)) }))}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label htmlFor="notes" className="block text-sm font-medium text-gray-700">
+                Notes
+              </label>
+              <textarea
+                id="notes"
+                name="notes"
+                value={formData.notes}
+                onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                rows={4}
+              />
+            </div>
+          </>
         )}
 
         <div className="flex justify-end space-x-2 mt-4">
