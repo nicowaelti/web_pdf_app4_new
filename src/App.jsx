@@ -1096,6 +1096,37 @@ function App() {
               selectNodesOnDrag={false}
               onNodeDoubleClick={(_, node) => setEditNode(node)}
               onNodesChange={async (changes) => {
+                // Handle node deletions first
+                const deletedNodes = changes.filter(change => change.type === 'remove');
+                for (const node of deletedNodes) {
+                  try {
+                    // Extract node type and ID
+                    const parts = node.id.split('-');
+                    const nodeId = parts[parts.length - 1];
+                    const nodeType = parts.slice(0, -1).join('-');
+                    
+                    // Determine Neo4j label
+                    const label = nodeType === 'paper' ? 'Paper' :
+                                nodeType === 'topic' ? 'Topic' :
+                                nodeType === 'central-topic' ? 'CentralTopic' :
+                                nodeType === 'ref' ? 'ReferencedText' : null;
+                    
+                    if (label) {
+                      // Delete the node and all its relationships
+                      await executeQuery(
+                        `
+                        MATCH (n:${label})
+                        WHERE ID(n) = $nodeId
+                        DETACH DELETE n
+                        `,
+                        { nodeId: parseInt(nodeId) }
+                      );
+                    }
+                  } catch (error) {
+                    console.error('Error deleting node from database:', error);
+                  }
+                }
+
                 // Apply changes to the visual nodes while preserving selection and type-specific styles
                 setNodes((nds) => {
                   const updatedNodes = applyNodeChanges(changes, nds);
@@ -1157,18 +1188,35 @@ function App() {
                 const deletedEdges = changes.filter(change => change.type === 'remove');
                 for (const edge of deletedEdges) {
                   try {
-                    // Extract IDs from edge ID (format: edge-type-id-type-id-timestamp)
+                    // Extract IDs and types from edge ID (format: edge-type-id-type-id-timestamp)
                     const parts = edge.id.split('-');
+                    const sourceType = parts[1];
                     const sourceId = parts[2];
+                    const targetType = parts[3];
                     const targetId = parts[4];
-                    await executeQuery(
-                      `
-                      MATCH (source)-[r]->(target)
-                      WHERE ID(source) = $sourceId AND ID(target) = $targetId
-                      DELETE r
-                      `,
-                      { sourceId: parseInt(sourceId), targetId: parseInt(targetId) }
-                    );
+
+                    // Map types to Neo4j labels
+                    const sourceLabel = sourceType === 'paper' ? 'Paper' :
+                                      sourceType === 'topic' ? 'Topic' :
+                                      sourceType === 'central-topic' ? 'CentralTopic' :
+                                      sourceType === 'ref' ? 'ReferencedText' : null;
+
+                    const targetLabel = targetType === 'paper' ? 'Paper' :
+                                      targetType === 'topic' ? 'Topic' :
+                                      targetType === 'central-topic' ? 'CentralTopic' :
+                                      targetType === 'ref' ? 'ReferencedText' : null;
+
+                    if (sourceLabel && targetLabel) {
+                      // Delete any relationship between these nodes
+                      await executeQuery(
+                        `
+                        MATCH (source:${sourceLabel})-[r]-(target:${targetLabel})
+                        WHERE ID(source) = $sourceId AND ID(target) = $targetId
+                        DELETE r
+                        `,
+                        { sourceId: parseInt(sourceId), targetId: parseInt(targetId) }
+                      );
+                    }
                   } catch (error) {
                     console.error('Error deleting edge in Neo4j:', error);
                   }
