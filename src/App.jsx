@@ -54,7 +54,15 @@ import 'reactflow/dist/style.css';
 import './index.css';
 
 // Initialize PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+try {
+  console.log('Initializing PDF.js worker...');
+  if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+  }
+  console.log('PDF.js worker initialized successfully');
+} catch (error) {
+  console.error('Error initializing PDF.js worker:', error);
+}
 
 // Helper function for random positioning
 const getRandomPosition = () => ({
@@ -261,7 +269,7 @@ function App() {
           name: $name,
           positionX: $positionX,
           positionY: $positionY,
-          timestamp: datetime()
+          createdAt: datetime()
         })
         RETURN ID(ct) as topicId
         `,
@@ -724,13 +732,15 @@ function App() {
           WHERE ID(p) = $paperId
           CREATE (t:TextMark {
             text: $text,
-            timestamp: datetime()
+            createdAt: datetime()
           })
           CREATE (p)-[r:HAS_MARK]->(t)
           `,
           {
             paperId: currentPaperId,
-            text: selectedText
+            text: selectedText,
+            positionX: getRandomPosition().x,
+            positionY: getRandomPosition().y
           }
         );
         console.log('Marked text saved and linked to paper:', selectedText);
@@ -742,14 +752,18 @@ function App() {
           WHERE ID(p) = $paperId
           CREATE (r:ReferencedText {
             text: $text,
-            timestamp: datetime()
+            createdAt: datetime(),
+            positionX: $positionX,
+            positionY: $positionY
           })
           CREATE (p)-[rel:HAS_REFERENCE]->(r)
           RETURN ID(r) as refId
           `,
           {
             paperId: currentPaperId,
-            text: selectedText
+            text: selectedText,
+            positionX: getRandomPosition().x,
+            positionY: getRandomPosition().y
           }
         );
         
@@ -786,7 +800,9 @@ function App() {
   };
 
   const processPdfPage = async (page, pageNum) => {
+    console.log('Getting text content for page...');
     const textContent = await page.getTextContent();
+    console.log('Text content received:', textContent);
     const viewport = page.getViewport({ scale: 1.0 });
     
     // Group text items by their vertical position (lines)
@@ -802,7 +818,6 @@ function App() {
         y: item.transform[5],
         width: item.width,
         height: item.height,
-        // More accurate font size calculation using transform matrix
         fontSize: Math.sqrt(item.transform[0] * item.transform[0] + item.transform[1] * item.transform[1]),
         fontFamily: item.fontName,
         ascent: item.ascent,
@@ -821,32 +836,29 @@ function App() {
         items: items.sort((a, b) => a.x - b.x)
       }));
 
+    // Process the sorted lines into text content
     return {
       number: pageNum,
-      content: sortedLines.map((line, lineIndex) => {
-        // Calculate average line height based on font metrics
-        const avgLineHeight = line.items.reduce((sum, item) =>
-          sum + (item.ascent - item.descent), 0) / line.items.length;
-
-        // Calculate line spacing based on vertical position difference with previous line
-        const prevLine = lineIndex > 0 ? sortedLines[lineIndex - 1] : null;
-        const lineSpacing = prevLine ? (line.y - prevLine.y) / avgLineHeight : 1;
+      content: sortedLines.map(line => {
+        const text = line.items.map(item => item.text).join('');
+        if (!text.trim()) return null; // Skip empty lines
+        
+        const firstItem = line.items[0];
+        const style = {
+          fontSize: `${Math.round(firstItem.fontSize)}px`,
+          fontFamily: firstItem.fontFamily.replace('+', ' '),
+          marginLeft: `${Math.round(firstItem.x / viewport.width * 100)}%`,
+          fontWeight: firstItem.bold ? 'bold' : 'normal',
+          fontStyle: firstItem.italic ? 'italic' : 'normal',
+          position: 'relative',
+          display: 'block'
+        };
 
         return {
-          text: line.items.map(item => item.text).join(''),
-          style: {
-            fontSize: `${Math.round(line.items[0].fontSize)}px`,
-            fontFamily: line.items[0].fontFamily.replace('+', ' '),
-            marginLeft: `${Math.round(line.items[0].x / viewport.width * 100)}%`,
-            fontWeight: line.items[0].bold ? 'bold' : 'normal',
-            fontStyle: line.items[0].italic ? 'italic' : 'normal',
-            lineHeight: `${Math.max(1.2, lineSpacing)}`,
-            marginTop: lineSpacing > 1.5 ? `${(lineSpacing - 1) * 1}em` : '0',
-            textAlign: 'left',
-            position: 'relative'
-          }
+          text,
+          style
         };
-      })
+      }).filter(Boolean) // Remove null entries (empty lines)
     };
   };
 
@@ -860,8 +872,10 @@ function App() {
     setIsLoading(true);
     try {
       const arrayBuffer = await file.arrayBuffer();
+      console.log('Loading PDF...');
       const loadingTask = pdfjsLib.getDocument(arrayBuffer);
       const pdf = await loadingTask.promise;
+      console.log('PDF loaded successfully:', { numPages: pdf.numPages });
       
       // Extract metadata
       const metadata = await pdf.getMetadata().catch(() => ({ info: {} }));
@@ -967,12 +981,16 @@ function App() {
 
       // Process PDF pages
       const pages = [];
+      console.log('Processing PDF pages...');
       for (let i = 1; i <= pdf.numPages; i++) {
+        console.log(`Processing page ${i}...`);
         const page = await pdf.getPage(i);
         const processedPage = await processPdfPage(page, i);
+        console.log(`Page ${i} processed:`, processedPage);
         pages.push(processedPage);
       }
 
+      console.log('Setting PDF content...');
       setPdfContent({ pages });
     } catch (error) {
       console.error('Error processing PDF:', error);
@@ -1008,13 +1026,13 @@ function App() {
               </span>
             )}
           </h2>
-          <div className="bg-white p-8 rounded-lg shadow-sm max-h-[calc(100vh-10rem)] overflow-auto">
+          <div className="bg-white p-8 rounded-lg shadow-sm max-h-[calc(100vh-10rem)] overflow-auto min-w-[600px]">
             {isLoading ? (
               <div className="flex items-center justify-center text-gray-600">
                 <div className="animate-pulse">Loading PDF content...</div>
               </div>
             ) : (
-              <div className="pdf-content mx-auto">
+              <div className="pdf-content mx-auto whitespace-pre-wrap min-w-[500px]">
                 {pdfContent.pages.length === 0 ? (
                   <p>Select a PDF file to view its content here</p>
                 ) : (
@@ -1027,7 +1045,13 @@ function App() {
                         <div
                           key={idx}
                           className="pdf-paragraph"
-                          style={line.style}
+                          style={{
+                            ...line.style,
+                            whiteSpace: 'pre-wrap',
+                            marginBottom: '0.25em',
+                            lineHeight: '1.5',
+                            minHeight: '1.5em'
+                          }}
                         >
                           {line.text}
                         </div>
