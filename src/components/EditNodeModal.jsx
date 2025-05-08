@@ -14,6 +14,9 @@ const EditNodeModal = ({ node, isOpen, onClose, onSave }) => {
     ...(node?.type === 'paperNode' && {
       importance: node?.data?.importance || 0,
       notes: node?.data?.notes || ''
+    }),
+    ...(node?.type === 'topicNode' && {
+      siblingOrder: node?.data?.siblingOrder || 1
     })
   });
 
@@ -112,6 +115,23 @@ const EditNodeModal = ({ node, isOpen, onClose, onSave }) => {
               />
             </div>
           </>
+        )}
+
+        {node?.type === 'topicNode' && (
+          <div>
+            <label htmlFor="siblingOrder" className="block text-sm font-medium text-gray-700">
+              Sequence Order
+            </label>
+            <input
+              type="number"
+              id="siblingOrder"
+              name="siblingOrder"
+              min="1"
+              value={formData.siblingOrder}
+              onChange={(e) => setFormData(prev => ({ ...prev, siblingOrder: parseInt(e.target.value) || 1 }))}
+              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+            />
+          </div>
         )}
 
         <div className="flex justify-end space-x-2 mt-4">
