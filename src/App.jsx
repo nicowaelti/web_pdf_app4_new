@@ -353,10 +353,29 @@ function App() {
   const [newParagraphStatement, setNewParagraphStatement] = useState('');
   const [parentForNewParagraph, setParentForNewParagraph] = useState(null);
 
+  // Node Context Menu State
+  const [showNodeContextMenu, setShowNodeContextMenu] = useState(false);
+  const [nodeContextMenuPosition, setNodeContextMenuPosition] = useState({ x: 0, y: 0 });
+  const [contextNodeForMenu, setContextNodeForMenu] = useState(null);
+
   // Workspace state
   const [isDragging, setIsDragging] = useState(false);
   const [leftWidth, setLeftWidth] = useState(50);
   const [pdfContent, setPdfContent] = useState({ pages: [] });
+
+  // Add click-outside handler for context menu
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (showNodeContextMenu && !event.target.closest('.context-menu')) {
+        setShowNodeContextMenu(false);
+      }
+    };
+
+    document.addEventListener('click', handleClickOutside);
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+    };
+  }, [showNodeContextMenu]);
 
   const handleUpdateNode = async (formData) => {
     try {
@@ -983,33 +1002,36 @@ const handleCreateParagraphNode = async (parentId, statement) => {
 
  const onNodeContextMenu = useCallback((event, node) => {
    event.preventDefault();
-   // For Topic and CentralTopic nodes, offer to add a sub-topic OR a paragraph
-   if (node.type === 'topicNode' || node.type === 'centralTopicNode') {
-     // This is a simplified context menu. A real one would offer choices.
-     // For now, let's assume a way to distinguish or prioritize.
-     // We could, for example, use a confirm dialog to choose.
-     // To keep it simple and testable, I'll add a confirm dialog.
-     // In a real app, a small popover menu would be better.
-     if (confirm("Add Sub-Topic? (Cancel for Paragraph)")) {
-       setParentForNewTopic(node.id);
-       setShowTopicPopup(true);
-     } else {
-       setParentForNewParagraph(node.id);
-       setShowParagraphPopup(true);
-     }
-   }
-   // Add delete option for deletable nodes
-   // Note: Paragraph nodes are not explicitly made deletable here yet.
-   else if (node.type === 'paperNode') { // Only paperNode is deletable in this simplified example, adjust as needed
-     // TODO: Implement a proper context menu UI instead of just confirm/alert
-     if (confirm(`Delete ${node.type} "${node.data.label}"?`)) {
-       handleDeleteNode(node);
-     }
-   }
-      // Add other context menu options here if needed
-    },
-    [setParentForNewTopic, setShowTopicPopup, handleDeleteNode, setParentForNewParagraph, setShowParagraphPopup]
-  );
+   event.stopPropagation();
+   setNodeContextMenuPosition({ x: event.clientX, y: event.clientY });
+   setContextNodeForMenu(node);
+   setShowNodeContextMenu(true);
+ }, [setNodeContextMenuPosition, setContextNodeForMenu, setShowNodeContextMenu]);
+
+  const handleNodeContextMenuAction = useCallback((action) => {
+    if (!contextNodeForMenu) return;
+
+    switch (action) {
+      case 'addParagraph':
+        setParentForNewParagraph(contextNodeForMenu.id);
+        setShowParagraphPopup(true);
+        break;
+      case 'addSubTopic':
+        setParentForNewTopic(contextNodeForMenu.id);
+        setShowTopicPopup(true);
+        break;
+      case 'deleteNode':
+        // Optionally, add a confirm dialog here if desired
+        // if (confirm(`Delete ${contextNodeForMenu.type} "${contextNodeForMenu.data.label}"?`)) {
+        handleDeleteNode(contextNodeForMenu);
+        // }
+        break;
+      default:
+        console.warn('Unknown node context menu action:', action);
+    }
+    setShowNodeContextMenu(false);
+    setContextNodeForMenu(null);
+  }, [contextNodeForMenu, setParentForNewParagraph, setShowParagraphPopup, setParentForNewTopic, setShowTopicPopup, handleDeleteNode, setShowNodeContextMenu, setContextNodeForMenu]);
 
   // Initialize Neo4j connection
   useEffect(() => {
@@ -1927,6 +1949,49 @@ const handleCreateParagraphNode = async (parentId, statement) => {
           </div>
         )}
 
+        {/* Node Context Menu */}
+        {showNodeContextMenu && contextNodeForMenu && (
+          <div
+            className="fixed z-50 bg-white rounded-lg shadow-lg border border-gray-200 py-1 context-menu"
+            style={{
+              left: `${nodeContextMenuPosition.x}px`,
+              top: `${nodeContextMenuPosition.y}px`,
+            }}
+          >
+            {(contextNodeForMenu.type === 'topicNode' || contextNodeForMenu.type === 'centralTopicNode') && (
+              <>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleNodeContextMenuAction('addSubTopic');
+                  }}
+                  className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900"
+                >
+                  Add Sub-Topic
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleNodeContextMenuAction('addParagraph');
+                  }}
+                  className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900"
+                >
+                  Add Paragraph
+                </button>
+              </>
+            )}
+            {/* Add more conditions for other node types and actions, e.g., delete */}
+            {(contextNodeForMenu.type === 'paperNode' || contextNodeForMenu.type === 'topicNode' || contextNodeForMenu.type === 'paragraphNode' || contextNodeForMenu.type === 'referenceNode' || contextNodeForMenu.type === 'centralTopicNode') && ( // Adjust deletable types as needed
+              <button
+                onClick={() => handleNodeContextMenuAction('deleteNode')}
+                className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 hover:text-red-700 border-t border-gray-200 mt-1 pt-1"
+              >
+                Delete Node
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Resizer */}
         <div
           className={`workspace-resizer ${isDragging ? 'dragging' : ''}`}
@@ -2423,48 +2488,6 @@ let relationshipType = 'RELATES_TO'; // Default relationship type
         </div>
       )}
 
-      {/* New Paragraph Popup */}
-      {showParagraphPopup && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 shadow-xl max-w-md w-full">
-            <h3 className="text-xl font-semibold mb-4">
-              {parentForNewParagraph ? 'Create Sub-Paragraph' : 'Create New Paragraph (Orphan)'}
-            </h3>
-            <textarea
-              value={newParagraphStatement}
-              onChange={(e) => setNewParagraphStatement(e.target.value)}
-              placeholder="Enter paragraph statement"
-              className="w-full p-2 border border-gray-300 rounded mb-4"
-              rows="3"
-            />
-            <div className="flex justify-end space-x-3">
-              <button
-                onClick={() => {
-                  setShowParagraphPopup(false);
-                  setNewParagraphStatement('');
-                  setParentForNewParagraph(null); // Reset parent
-                }}
-                className="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  if (!newParagraphStatement.trim()) {
-                    alert('Please enter a paragraph statement');
-                    return;
-                  }
-                  await handleCreateParagraphNode(parentForNewParagraph, newParagraphStatement.trim());
-                  // State clearing is done inside handleCreateParagraphNode
-                }}
-                className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-              >
-                Create
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
