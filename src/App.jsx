@@ -1180,12 +1180,19 @@ const handleCreateParagraphNode = async (parentId, statement) => {
       console.log('Loading paragraphs...');
       const paragraphsQuery =
         'MATCH (p:Paragraph) ' +
+        'OPTIONAL MATCH (p)-[r_cites:CITES]->(ref:ReferencedText) ' +
         'RETURN ' +
-        '  ID(p) as paragraphId, ' +
-        '  p.Statement as statement, ' +
-        '  p.siblingOrder as siblingOrder, ' +
-        '  toFloat(p.positionX) as positionX, ' +
-        '  toFloat(p.positionY) as positionY';
+        '  ID(p) as paragraphId, p.Statement as statement, p.siblingOrder as siblingOrder, ' +
+        '  toFloat(p.positionX) as positionX, toFloat(p.positionY) as positionY, ' +
+        '  COLLECT(DISTINCT CASE ' +
+        '    WHEN r_cites IS NOT NULL THEN { ' +
+        '      otherId: ID(ref), ' +
+        "      otherType: 'referenceNode', " +
+        "      relationshipType: type(r_cites), " +
+        '      isOutgoing: true ' +
+        '    } ' +
+        '    ELSE null ' +
+        '  END) as connections';
       const paragraphs = await executeQuery(paragraphsQuery);
 
       const paragraphNodes = paragraphs.map(para => {
@@ -1197,13 +1204,37 @@ const handleCreateParagraphNode = async (parentId, statement) => {
           position: position,
           data: {
             label: para.get('statement') || '',
-            siblingOrder: safeConvertNeoInt(para.get('siblingOrder'), null)
-            // onRename handler for paragraphs can be added here if needed,
-            // similar to how it's done in handleCreateParagraphNode or for TopicNode
+            siblingOrder: safeConvertNeoInt(para.get('siblingOrder'), null),
+            // connections will be processed separately to create edges
+            connections: para.get('connections') // Store connections for edge creation
           }
         };
       });
       console.log('Paragraphs loaded:', paragraphNodes);
+
+      const paragraphCiteEdges = [];
+      paragraphs.forEach(para => {
+        const paragraphNeo4jId = safeConvertNeoInt(para.get('paragraphId'));
+        const connections = para.get('connections');
+        if (connections && Array.isArray(connections)) {
+          connections.forEach(conn => {
+            if (conn && conn.otherId && conn.otherType && conn.relationshipType === 'CITES') {
+              const sourceNodeId = `paragraph-${paragraphNeo4jId}`;
+              const targetNodeId = `${conn.otherType}-${safeConvertNeoInt(conn.otherId)}`; // Should be 'referenceNode-ID'
+              paragraphCiteEdges.push({
+                id: `edge-${sourceNodeId}-${targetNodeId}-${conn.relationshipType}-${Date.now()}-${Math.random()}`,
+                source: sourceNodeId,
+                target: targetNodeId,
+                type: 'simpleFloatingEdge', // As per plan
+                animated: true,
+                label: conn.relationshipType, // 'CITES'
+                markerEnd: { type: MarkerType.ArrowClosed }
+              });
+            }
+          });
+        }
+      });
+      console.log('Paragraph CITES edges created:', paragraphCiteEdges);
 
       console.log('Loading references...');
 
@@ -1269,7 +1300,7 @@ const handleCreateParagraphNode = async (parentId, statement) => {
             y: typeof ref.get('positionY') === 'number' ? ref.get('positionY') : getRandomPosition().y
           };
           return {
-            id: 'ref-' + ref.get('refId').toNumber(),
+            id: 'referenceNode-' + safeConvertNeoInt(ref.get('refId')), // Changed ID format
             type: 'referenceNode',
             position: position,
             data: {
@@ -1282,12 +1313,12 @@ const handleCreateParagraphNode = async (parentId, statement) => {
 
         const referenceEdges = references.map(ref => {
           const sourceType = ref.get('sourceType');
-          const sourceId = ref.get('sourceId').toNumber();
-          const refId = ref.get('refId').toNumber();
+          const sourceId = safeConvertNeoInt(ref.get('sourceId'));
+          const refId = safeConvertNeoInt(ref.get('refId'));
           return {
-            id: 'edge-' + sourceType + '-' + sourceId + '-ref-' + refId + '-' + Date.now() + '-' + Math.random(),
+            id: 'edge-' + sourceType + '-' + sourceId + '-referenceNode-' + refId + '-' + Date.now() + '-' + Math.random(), // Changed target part of ID
             source: sourceType + '-' + sourceId,
-            target: 'ref-' + refId,
+            target: 'referenceNode-' + refId, // Changed target ID format
             type: 'floating', // Consistent
             label: 'HAS_REFERENCE', // Explicit label
             animated: true,
@@ -1366,7 +1397,8 @@ const handleCreateParagraphNode = async (parentId, statement) => {
         const allEdges = [
           ...(centralEdges || []),
           ...(topicConnections || []),
-          ...(referenceEdges || [])
+          ...(referenceEdges || []),
+          ...(paragraphCiteEdges || []) // Added paragraph CITES edges
         ].filter(edge => edge && edge.source && edge.target);
         
         console.log('Setting edges:', allEdges);
@@ -2211,6 +2243,15 @@ let relationshipType = 'RELATES_TO'; // Default relationship type
                       WHERE ID(source) = $sourceId AND ID(r) = $targetId
                       CREATE (source)-[rel:HAS_REFERENCE]->(r)
                     `;
+                  } else if (sourceNode.type === 'paragraphNode' && targetNode.type === 'referenceNode') {
+                    relationshipType = 'CITES';
+                    query = `
+                      MATCH (p:Paragraph), (r:ReferencedText)
+                      WHERE ID(p) = $sourceId AND ID(r) = $targetId
+                      MERGE (p)-[rel:CITES]->(r)
+                      ON CREATE SET rel.createdAt = datetime()
+                      RETURN type(rel) as createdRelationshipType
+                    `;
                   } else if (targetNode.type === 'topicNode' || targetNode.type === 'paragraphNode') {
                     // Handle connections to topics or paragraphs
                     const sourceLabel = sourceNode.type === 'centralTopicNode' ? 'CentralTopic' :
@@ -2285,10 +2326,10 @@ let relationshipType = 'RELATES_TO'; // Default relationship type
 
                     // Create and add visual edge
                     const newEdge = {
-                      id: `edge-${sourceType}-${sourceId}-${targetType}-${targetId}-${relationshipType}-${Date.now()}-${Math.random()}`, // Added relationshipType for more unique ID
+                      id: (relationshipType === 'CITES') ? `e-${params.source}-${params.target}-${relationshipType}` : `edge-${sourceType}-${sourceId}-${targetType}-${targetId}-${relationshipType}-${Date.now()}-${Math.random()}`,
                       source: params.source,
                       target: params.target,
-                      type: 'floating',
+                      type: (relationshipType === 'CITES') ? 'simpleFloatingEdge' : 'floating', // Use simpleFloatingEdge for CITES
                       label: relationshipType,
                       animated: true,
                       markerEnd: { type: MarkerType.ArrowClosed },
