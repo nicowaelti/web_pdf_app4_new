@@ -138,6 +138,12 @@ const centralTopicNodeStyle = {
   minWidth: '150px'
 };
 
+const paragraphNodeStyle = {
+  ...commonNodeStyle,
+  backgroundColor: '#e6f7ff', // A light blue, adjust as needed
+  border: '1px solid #91d5ff'
+};
+
 const TopicNode = React.memo(({ data }) => {
   // Log to see exactly what TopicNode receives
   // The 'id' prop is passed directly by React Flow, not typically in data for custom nodes unless specifically put there.
@@ -222,11 +228,25 @@ const CentralTopicNode = React.memo(({ data }) => (
   </>
 ));
 
+const ParagraphNode = React.memo(({ data }) => (
+  <>
+    <Handle type="target" position={Position.Left} />
+    <div style={paragraphNodeStyle}>
+      <div>
+        {data.displayNumber && <span style={{ marginRight: '4px' }}>{data.displayNumber}</span>}
+        <span>{data.label}</span> {/* Statement will be in data.label */}
+      </div>
+    </div>
+    <Handle type="source" position={Position.Right} />
+  </>
+));
+
 const nodeTypes = {
   referenceNode: ReferenceNode,
   paperNode: PaperNode,
   topicNode: TopicNode,
   centralTopicNode: CentralTopicNode,
+  paragraphNode: ParagraphNode,
   custom: CustomNode
 };
 
@@ -251,15 +271,15 @@ const calculateDisplayNumbers = (nodes, edges) => {
 
   // Build adjacency list only for actual HAS_TOPIC relationships
   edges.forEach(edge => {
-    if (edge.type === 'floating' || edge.label === 'HAS_TOPIC') {
+    if (edge.type === 'floating' && (edge.label === 'HAS_TOPIC' || edge.label === 'HAS_PARAGRAPH')) {
       const parentNode = nodeMap.get(edge.source);
       const childNode = nodeMap.get(edge.target);
       // Only build parent-child relationship for valid connections
       if (parentNode && childNode &&
           (parentNode.type === 'centralTopicNode' || parentNode.type === 'topicNode') &&
-          childNode.type === 'topicNode') {
+          (childNode.type === 'topicNode' || childNode.type === 'paragraphNode')) {
         // Add to children array only if it has a valid siblingOrder
-        if (childNode.data.siblingOrder !== undefined) {
+        if (childNode.data.siblingOrder !== undefined && childNode.data.siblingOrder !== null) {
           parentNode.children.push(childNode);
         }
       }
@@ -272,7 +292,7 @@ const calculateDisplayNumbers = (nodes, edges) => {
 
     // Sort children by siblingOrder
     const sortedChildren = parentNode.children
-      .filter(child => child.type === 'topicNode' && child.data.siblingOrder !== undefined)
+      .filter(child => (child.type === 'topicNode' || child.type === 'paragraphNode') && child.data.siblingOrder !== undefined && child.data.siblingOrder !== null)
       .sort((a, b) => a.data.siblingOrder - b.data.siblingOrder);
 
     sortedChildren.forEach((child) => {
@@ -329,6 +349,9 @@ function App() {
   const [newTopicName, setNewTopicName] = useState(''); // For general new topics / sub-topics
   const [newCentralTopicName, setNewCentralTopicName] = useState('');
   const [parentForNewTopic, setParentForNewTopic] = useState(null); // To store parent when creating a sub-topic
+  const [showParagraphPopup, setShowParagraphPopup] = useState(false);
+  const [newParagraphStatement, setNewParagraphStatement] = useState('');
+  const [parentForNewParagraph, setParentForNewParagraph] = useState(null);
 
   // Workspace state
   const [isDragging, setIsDragging] = useState(false);
@@ -344,7 +367,8 @@ function App() {
       const label = nodeType === 'paper' ? 'Paper' :
                    nodeType === 'topic' ? 'Topic' :
                    nodeType === 'central-topic' ? 'CentralTopic' :
-                   nodeType === 'reference' ? 'ReferencedText' : null;
+                   nodeType === 'reference' ? 'ReferencedText' :
+                   nodeType === 'paragraph' ? 'Paragraph' : null;
 
       if (!label) {
         throw new Error('Invalid node type');
@@ -505,29 +529,41 @@ function App() {
         }
       } else { // Not a topic reorder OR siblingOrder didn't change for a topic
         // Standard DB update for non-topic nodes or if siblingOrder hasn't changed for a topic
-        let updateQuery = `
-          MATCH (n:${label})
-          WHERE ID(n) = $nodeId
-          SET n.name = $label`;
+        let updateQuery;
         const queryParams = {
           nodeId: parseInt(nodeId),
-          label: formData.label,
         };
 
-        if (nodeType === 'reference') {
-          updateQuery += ', n.text = $fullText';
-          queryParams.fullText = formData.fullText;
-        } else if (nodeType === 'paper') {
-          updateQuery += ', n.importance = $importance, n.notes = $notes';
-          queryParams.importance = parseInt(formData.importance || 0);
-          queryParams.notes = formData.notes || '';
-        } else if (nodeType === 'topic') {
-          // This case implies oldSiblingOrder === newSiblingOrder for a topic
-          if (oldSiblingOrder === newSiblingOrder) {
-             updateQuery += ', n.siblingOrder = $siblingOrder';
-             queryParams.siblingOrder = newSiblingOrder; // or oldSiblingOrder, they are the same
+        if (nodeType === 'paragraph') {
+          updateQuery = `
+            MATCH (n:Paragraph)
+            WHERE ID(n) = $nodeId
+            SET n.Statement = $statement`;
+          queryParams.statement = formData.label; // formData.label holds the statement for paragraphs
+        } else {
+          updateQuery = `
+            MATCH (n:${label})
+            WHERE ID(n) = $nodeId
+            SET n.name = $name`;
+          queryParams.name = formData.label;
+
+          if (nodeType === 'reference') {
+            updateQuery += ', n.text = $fullText';
+            queryParams.fullText = formData.fullText;
+          } else if (nodeType === 'paper') {
+            updateQuery += ', n.importance = $importance, n.notes = $notes';
+            queryParams.importance = parseInt(formData.importance || 0);
+            queryParams.notes = formData.notes || '';
+          } else if (nodeType === 'topic') {
+            // This case implies oldSiblingOrder === newSiblingOrder for a topic
+            // or it's a CentralTopic which doesn't have siblingOrder managed this way.
+            if (label === 'Topic' && oldSiblingOrder === newSiblingOrder) {
+               updateQuery += ', n.siblingOrder = $siblingOrder';
+               queryParams.siblingOrder = newSiblingOrder;
+            }
           }
         }
+        
         await executeQuery(updateQuery, queryParams);
         // Client-side update for the single edited node from formData
         setNodes(prevNodes =>
@@ -537,14 +573,14 @@ function App() {
                 ...node,
                 data: {
                   ...node.data,
-                  label: formData.label,
-                  ...(nodeType === 'referenceNode' && { fullText: formData.fullText }),
-                  ...(nodeType === 'paperNode' && {
+                  label: formData.label, // This is correct as 'label' in UI maps to 'name' or 'Statement'
+                  ...(nodeType === 'reference' && { fullText: formData.fullText }), // 'referenceNode' not 'reference'
+                  ...(nodeType === 'paper' && { // 'paperNode' not 'paper'
                     importance: parseInt(formData.importance || 0),
                     notes: formData.notes || ''
                   }),
-                  // Update siblingOrder from formData if it's a topic (even if unchanged, for consistency)
-                  ...(nodeType === 'topic' && { siblingOrder: newSiblingOrder })
+                  ...(nodeType === 'topic' && { siblingOrder: newSiblingOrder }), // 'topicNode' not 'topic'
+                  // No specific client-side data change needed for 'paragraph' beyond 'label'
                 }
               };
             }
@@ -834,25 +870,145 @@ const handleDeleteNode = async (nodeToDelete) => {
      alert(`Failed to create topic node: ${error.message}`);
    }
  };
+const handleCreateParagraphNode = async (parentId, statement) => {
+    if (!statement.trim()) {
+      alert('Paragraph statement is required.');
+      return;
+    }
+
+    const position = getRandomPosition();
+    let newParagraphId;
+    let newSiblingOrder = null; // Will be set if parented
+
+    try {
+      let query;
+      let params;
+
+      if (parentId) {
+        const parentIdParts = parentId.split('-');
+        const parentNeo4jId = parseInt(parentIdParts[parentIdParts.length - 1]);
+        // Assuming parent can be Topic or CentralTopic, adjust if necessary
+        const parentLabel = parentIdParts[0] === 'central' ? 'CentralTopic' : 'Topic';
+
+        query = `
+          MATCH (p:\`${parentLabel}\`) WHERE ID(p) = $parentNeo4jId
+          OPTIONAL MATCH (p)-[:HAS_PARAGRAPH]->(existingChild:Paragraph)
+          WITH p, COUNT(existingChild) AS siblingCount
+          CREATE (newParagraph:Paragraph {
+            Statement: $statement,
+            siblingOrder: siblingCount + 1,
+            positionX: $positionX,
+            positionY: $positionY,
+            createdAt: timestamp()
+          })
+          CREATE (p)-[r:HAS_PARAGRAPH]->(newParagraph)
+          RETURN ID(newParagraph) AS newParagraphId, newParagraph.siblingOrder AS newSiblingOrder, newParagraph.positionX AS posX, newParagraph.positionY AS posY`;
+        params = { parentNeo4jId, statement, positionX: position.x, positionY: position.y };
+      } else {
+        // Create an orphan paragraph
+        query = `
+          CREATE (newParagraph:Paragraph {
+            Statement: $statement,
+            positionX: $positionX,
+            positionY: $positionY,
+            createdAt: timestamp()
+          })
+          RETURN ID(newParagraph) AS newParagraphId, null AS newSiblingOrder, newParagraph.positionX AS posX, newParagraph.positionY AS posY`;
+        params = { statement, positionX: position.x, positionY: position.y };
+      }
+
+      const result = await executeQuery(query, params);
+
+      if (!result || result.length === 0) {
+        throw new Error('Paragraph creation did not return expected result');
+      }
+
+      const newRecord = result[0];
+      newParagraphId = newRecord.get('newParagraphId').toNumber();
+      newSiblingOrder = newRecord.get('newSiblingOrder')?.toNumber(); // Will be null for orphan
+      const newPosition = {
+        x: safeConvertNeoInt(newRecord.get('posX'), position.x),
+        y: safeConvertNeoInt(newRecord.get('posY'), position.y)
+      };
+
+      const newNode = {
+        id: 'paragraph-' + newParagraphId,
+        type: 'paragraphNode',
+        position: newPosition,
+        data: {
+          label: statement, // Using label for the statement text
+          siblingOrder: newSiblingOrder,
+          onRename: async (newName) => {
+            try {
+              await executeQuery(
+                'MATCH (p:Paragraph) WHERE ID(p) = $paragraphId SET p.Statement = $newStatement',
+                { paragraphId: newParagraphId, newStatement: newName }
+              );
+              setNodes(prev => prev.map(node =>
+                node.id === 'paragraph-' + newParagraphId
+                  ? { ...node, data: { ...node.data, label: newName } }
+                  : node
+              ));
+            } catch (renameError) {
+              console.error('Error renaming paragraph:', renameError);
+              alert('Failed to rename paragraph.');
+            }
+          }
+        }
+      };
+
+      setNodes(prev => [...prev, newNode]);
+
+      if (parentId) {
+        const newEdge = {
+          id: 'e-' + parentId + '-paragraph-' + newParagraphId,
+          source: parentId,
+          target: newNode.id,
+          type: 'floating', 
+          label: 'HAS_PARAGRAPH', 
+          animated: true,
+          markerEnd: { type: MarkerType.ArrowClosed }
+        };
+        setEdges(prev => addEdge(newEdge, prev));
+      }
+    } catch (error) {
+      console.error('Error creating paragraph node:', error);
+      alert('Failed to create paragraph: ' + error.message);
+    }
+
+    setNewParagraphStatement('');
+    setShowParagraphPopup(false);
+    setParentForNewParagraph(null);
+  };
 
  const onNodeContextMenu = useCallback((event, node) => {
    event.preventDefault();
+   // For Topic and CentralTopic nodes, offer to add a sub-topic OR a paragraph
    if (node.type === 'topicNode' || node.type === 'centralTopicNode') {
-     // For simplicity, we'll reuse the existing newTopicName state and showTopicPopup
-     // We set the parent for the new topic.
-     setParentForNewTopic(node.id);
-     setShowTopicPopup(true);
-     // If we had a dedicated actual context menu UI, we would set its properties here.
-     // For now, we directly show the modal.
+     // This is a simplified context menu. A real one would offer choices.
+     // For now, let's assume a way to distinguish or prioritize.
+     // We could, for example, use a confirm dialog to choose.
+     // To keep it simple and testable, I'll add a confirm dialog.
+     // In a real app, a small popover menu would be better.
+     if (confirm("Add Sub-Topic? (Cancel for Paragraph)")) {
+       setParentForNewTopic(node.id);
+       setShowTopicPopup(true);
+     } else {
+       setParentForNewParagraph(node.id);
+       setShowParagraphPopup(true);
+     }
    }
    // Add delete option for deletable nodes
-   else if (node.type === 'topicNode' || node.type === 'paperNode') { // Example: Allow delete for Topic and Paper nodes
+   // Note: Paragraph nodes are not explicitly made deletable here yet.
+   else if (node.type === 'paperNode') { // Only paperNode is deletable in this simplified example, adjust as needed
      // TODO: Implement a proper context menu UI instead of just confirm/alert
-         handleDeleteNode(node); // Directly call delete for now
-      }
+     if (confirm(`Delete ${node.type} "${node.data.label}"?`)) {
+       handleDeleteNode(node);
+     }
+   }
       // Add other context menu options here if needed
     },
-    [setParentForNewTopic, setShowTopicPopup, handleDeleteNode] // Added handleDeleteNode dependency
+    [setParentForNewTopic, setShowTopicPopup, handleDeleteNode, setParentForNewParagraph, setShowParagraphPopup]
   );
 
   // Initialize Neo4j connection
@@ -867,31 +1023,32 @@ const handleDeleteNode = async (nodeToDelete) => {
         setDbStatus('connected');
         
         // Load all central topics and their connections
-        const centralTopics = await executeQuery(`
-          MATCH (ct:CentralTopic)
-          OPTIONAL MATCH (ct)-[r:HAS_TOPIC|HAS_REFERENCE]-(other)
-          RETURN
-            ID(ct) as topicId,
-            ct.name as name,
-            toFloat(ct.positionX) as positionX,
-            toFloat(ct.positionY) as positionY,
-            COLLECT(DISTINCT {
-              otherId: ID(other),
-              otherType: CASE
-                WHEN other:Topic THEN 'topic'
-                WHEN other:Paper THEN 'paper'
-                WHEN other:CentralTopic THEN 'central-topic'
-              END,
-              isOutgoing: startNode(r) = ct
-            }) as connections
-        `);
+        const centralTopicsQuery =
+          'MATCH (ct:CentralTopic) ' +
+          'OPTIONAL MATCH (ct)-[r:HAS_TOPIC|HAS_REFERENCE|HAS_PARAGRAPH]-(other) ' +
+          'RETURN ' +
+          '  ID(ct) as topicId, ' +
+          '  ct.name as name, ' +
+          '  toFloat(ct.positionX) as positionX, ' +
+          '  toFloat(ct.positionY) as positionY, ' +
+          '  COLLECT(DISTINCT { ' +
+          '    otherId: ID(other), ' +
+          '    otherType: CASE ' +
+          "      WHEN other:Topic THEN 'topic' " +
+          "      WHEN other:Paper THEN 'paper' " +
+          "      WHEN other:CentralTopic THEN 'central-topic' " +
+          "      WHEN other:Paragraph THEN 'paragraph' " +
+          '    END, ' +
+          '    isOutgoing: startNode(r) = ct ' +
+          '  }) as connections';
+        const centralTopics = await executeQuery(centralTopicsQuery);
 
         const centralTopicNodes = centralTopics.map(topic => {
           const defaultPos = getRandomPosition();
           const position = safeGetPosition(topic, defaultPos);
           const idValue = safeConvertNeoInt(topic.get('topicId'));
           return {
-            id: `central-topic-${idValue}`,
+            id: 'central-topic-' + idValue,
             type: 'centralTopicNode',
             position,
             data: {
@@ -900,16 +1057,12 @@ const handleDeleteNode = async (nodeToDelete) => {
                 const nodeId = idValue; // Capture the ID in closure
                 try {
                   await executeQuery(
-                    `
-                    MATCH (ct:CentralTopic)
-                    WHERE ID(ct) = $topicId
-                    SET ct.name = $newName
-                    `,
+                    'MATCH (ct:CentralTopic) WHERE ID(ct) = $topicId SET ct.name = $newName',
                     { topicId: nodeId, newName }
                   );
                   setNodes(prev =>
                     prev.map(node =>
-                      node.id === `central-topic-${nodeId}`
+                      node.id === 'central-topic-' + nodeId
                         ? { ...node, data: { ...node.data, label: newName } }
                         : node
                     )
@@ -927,16 +1080,16 @@ const handleDeleteNode = async (nodeToDelete) => {
 
         console.log('Loading papers...');
         // Load all papers and their references
-        const papers = await executeQuery(`
-          MATCH (p:Paper)
-          RETURN
-            ID(p) as paperId,
-            p.title as title,
-            toFloat(p.positionX) as positionX,
-            toFloat(p.positionY) as positionY,
-            p.importance as importance,
-            p.notes as notes
-        `);
+        const papersQuery =
+          'MATCH (p:Paper) ' +
+          'RETURN ' +
+          '  ID(p) as paperId, ' +
+          '  p.title as title, ' +
+          '  toFloat(p.positionX) as positionX, ' +
+          '  toFloat(p.positionY) as positionY, ' +
+          '  p.importance as importance, ' +
+          '  p.notes as notes';
+        const papers = await executeQuery(papersQuery);
         
         // Load papers with their positions
         const paperNodes = papers.map(paper => {
@@ -950,7 +1103,7 @@ const handleDeleteNode = async (nodeToDelete) => {
           const idValue = safeConvertNeoInt(paper.get('paperId'));
 
           return {
-            id: `paper-${idValue}`,
+            id: 'paper-' + idValue,
             type: 'paperNode',
             position: position,
             data: {
@@ -965,31 +1118,32 @@ const handleDeleteNode = async (nodeToDelete) => {
       console.log('Loading topics...');
 
         // Load all topics and their connections
-        const topics = await executeQuery(`
-          MATCH (t:Topic)
-          OPTIONAL MATCH (t)-[r:HAS_TOPIC|HAS_REFERENCE]-(other)
-          RETURN
-            ID(t) as topicId,
-            t.name as name,
-            t.siblingOrder as siblingOrder,
-            toFloat(t.positionX) as positionX,
-            toFloat(t.positionY) as positionY,
-            COLLECT(DISTINCT {
-              otherId: ID(other),
-              otherType: CASE
-                WHEN other:Topic THEN 'topic'
-                WHEN other:Paper THEN 'paper'
-                WHEN other:CentralTopic THEN 'central-topic'
-              END,
-              isOutgoing: startNode(r) = t
-            }) as connections
-        `);
+        const topicsQuery =
+          'MATCH (t:Topic) ' +
+          'OPTIONAL MATCH (t)-[r:HAS_TOPIC|HAS_REFERENCE|HAS_PARAGRAPH]-(other) ' +
+          'RETURN ' +
+          '  ID(t) as topicId, ' +
+          '  t.name as name, ' +
+          '  t.siblingOrder as siblingOrder, ' +
+          '  toFloat(t.positionX) as positionX, ' +
+          '  toFloat(t.positionY) as positionY, ' +
+          '  COLLECT(DISTINCT { ' +
+          '    otherId: ID(other), ' +
+          '    otherType: CASE ' +
+          "      WHEN other:Topic THEN 'topic' " +
+          "      WHEN other:Paper THEN 'paper' " +
+          "      WHEN other:CentralTopic THEN 'central-topic' " +
+          "      WHEN other:Paragraph THEN 'paragraph' " +
+          '    END, ' +
+          '    isOutgoing: startNode(r) = t ' +
+          '  }) as connections';
+        const topics = await executeQuery(topicsQuery);
 
         const topicNodes = topics.map(topic => {
           const defaultPos = getRandomPosition();
           const position = safeGetPosition(topic, defaultPos);
           return {
-            id: `topic-${safeConvertNeoInt(topic.get('topicId'))}`,
+            id: 'topic-' + safeConvertNeoInt(topic.get('topicId')),
             type: 'topicNode',
             position: position,
             data: {
@@ -1000,25 +1154,55 @@ const handleDeleteNode = async (nodeToDelete) => {
         });
 
       console.log('Topics loaded:', topicNodes);
+
+      console.log('Loading paragraphs...');
+      const paragraphsQuery =
+        'MATCH (p:Paragraph) ' +
+        'RETURN ' +
+        '  ID(p) as paragraphId, ' +
+        '  p.Statement as statement, ' +
+        '  p.siblingOrder as siblingOrder, ' +
+        '  toFloat(p.positionX) as positionX, ' +
+        '  toFloat(p.positionY) as positionY';
+      const paragraphs = await executeQuery(paragraphsQuery);
+
+      const paragraphNodes = paragraphs.map(para => {
+        const defaultPos = getRandomPosition();
+        const position = safeGetPosition(para, defaultPos);
+        return {
+          id: 'paragraph-' + safeConvertNeoInt(para.get('paragraphId')),
+          type: 'paragraphNode',
+          position: position,
+          data: {
+            label: para.get('statement') || '',
+            siblingOrder: safeConvertNeoInt(para.get('siblingOrder'), null)
+            // onRename handler for paragraphs can be added here if needed,
+            // similar to how it's done in handleCreateParagraphNode or for TopicNode
+          }
+        };
+      });
+      console.log('Paragraphs loaded:', paragraphNodes);
+
       console.log('Loading references...');
 
         // Load all connections
-        const centralConnections = await executeQuery(`
-          MATCH (ct:CentralTopic)-[r]-(n)
-          WHERE type(r) IN ['HAS_TOPIC', 'HAS_REFERENCE']
-          RETURN
-            ID(ct) as ctId,
-            ID(n) as otherId,
-            type(r) as relationType,
-            startNode(r) = ct as isOutgoing,
-            labels(n) as nodeLabels,
-            CASE
-              WHEN n:Paper THEN 'paper'
-              WHEN n:Topic THEN 'topic'
-              WHEN n:CentralTopic THEN 'central-topic'
-              WHEN n:ReferencedText THEN 'ref'
-            END as otherType
-        `);
+        const centralConnectionsQuery =
+          "MATCH (ct:CentralTopic)-[r]-(n) " +
+          "WHERE type(r) IN ['HAS_TOPIC', 'HAS_REFERENCE', 'HAS_PARAGRAPH'] " +
+          "RETURN " +
+          "  ID(ct) as ctId, " +
+          "  ID(n) as otherId, " +
+          "  type(r) as relationType, " +
+          "  startNode(r) = ct as isOutgoing, " +
+          "  labels(n) as nodeLabels, " +
+          "  CASE " +
+          "    WHEN n:Paper THEN 'paper' " +
+          "    WHEN n:Topic THEN 'topic' " +
+          "    WHEN n:CentralTopic THEN 'central-topic' " +
+          "    WHEN n:ReferencedText THEN 'ref' " +
+          "    WHEN n:Paragraph THEN 'paragraph' " +
+          "  END as otherType";
+        const centralConnections = await executeQuery(centralConnectionsQuery);
 
         const centralEdges = centralConnections.map(conn => {
           const ctId = conn.get('ctId').toNumber();
@@ -1027,34 +1211,35 @@ const handleDeleteNode = async (nodeToDelete) => {
           const isOutgoing = conn.get('isOutgoing');
           const relationType = conn.get('relationType');
           
-          // Get the correct source and target based on the relationship direction
-          let source = isOutgoing ? `central-topic-${ctId}` : `${otherType}-${otherId}`;
-          let target = isOutgoing ? `${otherType}-${otherId}` : `central-topic-${ctId}`;
+          let source = isOutgoing ? 'central-topic-' + ctId : otherType + '-' + otherId;
+          let target = isOutgoing ? otherType + '-' + otherId : 'central-topic-' + ctId;
 
           // Log edge creation for debugging
           console.log('Creating edge:', { source, target, relationType, isOutgoing });
           
           return {
-            id: `edge-${source}-${target}-${Date.now()}-${Math.random()}`,
+            id: 'edge-' + source + '-' + target + '-' + relationType + '-' + Date.now() + '-' + Math.random(), // Added relationType for uniqueness
             source,
             target,
-            type: 'default',
-            animated: true
+            type: 'floating', // Consistent with other custom edges
+            label: relationType, // Use the actual relationship type as label
+            animated: true,
+            markerEnd: { type: MarkerType.ArrowClosed } // Consistent marker
           };
         });
 
         // Load remaining references and their connections
-        const references = await executeQuery(`
-          MATCH (source)-[rel:HAS_REFERENCE]->(r:ReferencedText)
-          WHERE source:Paper OR source:Topic
-          RETURN
-            CASE WHEN source:Paper THEN 'paper' ELSE 'topic' END as sourceType,
-            ID(source) as sourceId,
-            ID(r) as refId,
-            r.text as text,
-            toFloat(r.positionX) as positionX,
-            toFloat(r.positionY) as positionY
-        `);
+        const referencesQuery =
+          "MATCH (source)-[rel:HAS_REFERENCE]->(r:ReferencedText) " +
+          "WHERE source:Paper OR source:Topic " +
+          "RETURN " +
+          "  CASE WHEN source:Paper THEN 'paper' ELSE 'topic' END as sourceType, " +
+          "  ID(source) as sourceId, " +
+          "  ID(r) as refId, " +
+          "  r.text as text, " +
+          "  toFloat(r.positionX) as positionX, " +
+          "  toFloat(r.positionY) as positionY";
+        const references = await executeQuery(referencesQuery);
 
         const referenceNodes = references.map(ref => {
           const position = {
@@ -1062,7 +1247,7 @@ const handleDeleteNode = async (nodeToDelete) => {
             y: typeof ref.get('positionY') === 'number' ? ref.get('positionY') : getRandomPosition().y
           };
           return {
-            id: `ref-${ref.get('refId').toNumber()}`,
+            id: 'ref-' + ref.get('refId').toNumber(),
             type: 'referenceNode',
             position: position,
             data: {
@@ -1078,11 +1263,13 @@ const handleDeleteNode = async (nodeToDelete) => {
           const sourceId = ref.get('sourceId').toNumber();
           const refId = ref.get('refId').toNumber();
           return {
-            id: `edge-${sourceType}-${sourceId}-ref-${refId}-${Date.now()}-${Math.random()}`,
-            source: `${sourceType}-${sourceId}`,
-            target: `ref-${refId}`,
-            type: 'default',
-            animated: true
+            id: 'edge-' + sourceType + '-' + sourceId + '-ref-' + refId + '-' + Date.now() + '-' + Math.random(),
+            source: sourceType + '-' + sourceId,
+            target: 'ref-' + refId,
+            type: 'floating', // Consistent
+            label: 'HAS_REFERENCE', // Explicit label
+            animated: true,
+            markerEnd: { type: MarkerType.ArrowClosed }
           };
         });
 
@@ -1095,17 +1282,19 @@ const handleDeleteNode = async (nodeToDelete) => {
           connections.forEach(conn => {
             if (conn.otherId && conn.otherType) {
               const sourceId = conn.isOutgoing ?
-                `central-topic-${ct.get('topicId').toNumber()}` :
-                `${conn.otherType}-${conn.otherId.toNumber()}`;
+                'central-topic-' + ct.get('topicId').toNumber() :
+                conn.otherType + '-' + conn.otherId.toNumber();
               const targetId = conn.isOutgoing ?
-                `${conn.otherType}-${conn.otherId.toNumber()}` :
-                `central-topic-${ct.get('topicId').toNumber()}`;
+                conn.otherType + '-' + conn.otherId.toNumber() :
+                'central-topic-' + ct.get('topicId').toNumber();
               topicConnections.push({
-                id: `edge-${sourceId}-${targetId}-${Date.now()}-${Math.random()}`,
+                id: 'edge-' + sourceId + '-' + targetId + '-' + conn.relationType + '-' + Date.now() + '-' + Math.random(),
                 source: sourceId,
                 target: targetId,
-                type: 'default',
-                animated: true
+                type: 'floating',
+                label: conn.relationType, // Use the actual relationship type
+                animated: true,
+                markerEnd: { type: MarkerType.ArrowClosed }
               });
             }
           });
@@ -1117,17 +1306,19 @@ const handleDeleteNode = async (nodeToDelete) => {
           connections.forEach(conn => {
             if (conn.otherId && conn.otherType) {
               const sourceId = conn.isOutgoing ?
-                `topic-${topic.get('topicId').toNumber()}` :
-                `${conn.otherType}-${conn.otherId.toNumber()}`;
+                'topic-' + topic.get('topicId').toNumber() :
+                conn.otherType + '-' + conn.otherId.toNumber();
               const targetId = conn.isOutgoing ?
-                `${conn.otherType}-${conn.otherId.toNumber()}` :
-                `topic-${topic.get('topicId').toNumber()}`;
+                conn.otherType + '-' + conn.otherId.toNumber() :
+                'topic-' + topic.get('topicId').toNumber();
               topicConnections.push({
-                id: `edge-${sourceId}-${targetId}-${Date.now()}-${Math.random()}`,
+                id: 'edge-' + sourceId + '-' + targetId + '-' + conn.relationType + '-' + Date.now() + '-' + Math.random(),
                 source: sourceId,
                 target: targetId,
-                type: 'default',
-                animated: true
+                type: 'floating',
+                label: conn.relationType, // Use the actual relationship type
+                animated: true,
+                markerEnd: { type: MarkerType.ArrowClosed }
               });
             }
           });
@@ -1137,6 +1328,7 @@ const handleDeleteNode = async (nodeToDelete) => {
         const baseNodes = [
           ...paperNodes,
           ...topicNodes,
+          ...paragraphNodes,
           ...(referenceNodes || []),
           ...centralTopicNodes
         ];
@@ -1834,30 +2026,27 @@ const handleDeleteNode = async (nodeToDelete) => {
                   const label = nodeType === 'paper' ? 'Paper' :
                               nodeType === 'topic' ? 'Topic' :
                               nodeType === 'central-topic' ? 'CentralTopic' :
-                              nodeType === 'ref' ? 'ReferencedText' : null;
+                              nodeType === 'ref' ? 'ReferencedText' :
+                              nodeType === 'paragraph' ? 'Paragraph' : null;
                   
                   // Log position update for debugging
                   console.log('Updating position for:', { nodeType, nodeId, label, position: change.position });
                   
                   if (label) {
                     try {
-                      const existingNode = nodes.find(n => n.id === change.id);
+                      // const existingNode = nodes.find(n => n.id === change.id); // Not strictly needed for position-only update
                       await executeQuery(
                         `
                         MATCH (n:${label})
                         WHERE ID(n) = $nodeId
                         SET n.positionX = $positionX,
                             n.positionY = $positionY
-                            ${label === 'Paper' ? ', n.importance = $importance, n.notes = $notes' : ''}
-                        `,
+                        `, // Simplified: only update position on drag
                         {
                           nodeId: parseInt(nodeId),
                           positionX: change.position.x,
                           positionY: change.position.y,
-                          ...(label === 'Paper' && {
-                            importance: existingNode?.data?.importance || 0,
-                            notes: existingNode?.data?.notes || ''
-                          })
+                          // Removed paper-specific importance/notes from drag update
                         }
                       );
                     } catch (error) {
@@ -1957,23 +2146,24 @@ let relationshipType = 'RELATES_TO'; // Default relationship type
                       WHERE ID(source) = $sourceId AND ID(r) = $targetId
                       CREATE (source)-[rel:HAS_REFERENCE]->(r)
                     `;
-                  } else if (targetNode.type === 'topicNode') {
-                    // Handle connections to topics
+                  } else if (targetNode.type === 'topicNode' || targetNode.type === 'paragraphNode') {
+                    // Handle connections to topics or paragraphs
                     const sourceLabel = sourceNode.type === 'centralTopicNode' ? 'CentralTopic' :
-                                     sourceNode.type === 'paperNode' ? 'Paper' : 'Topic';
-                    const targetLabel = 'Topic';
-                    relationshipType = 'HAS_TOPIC'; // Ensure relationshipType is set
+                                     sourceNode.type === 'paperNode' ? 'Paper' :
+                                     sourceNode.type === 'topicNode' ? 'Topic' : 'Paragraph'; // Assuming Paragraph can also be a source
+                    const targetLabel = targetNode.type === 'topicNode' ? 'Topic' : 'Paragraph';
+                    relationshipType = targetNode.type === 'topicNode' ? 'HAS_TOPIC' : 'HAS_PARAGRAPH';
                     query = `
                       MATCH (source:${sourceLabel}), (target:${targetLabel})
                       WHERE ID(source) = $sourceId AND ID(target) = $targetId
                       
                       // Ensure the relationship exists or create it
-                      MERGE (source)-[r:HAS_TOPIC]->(target)
+                      MERGE (source)-[r:${relationshipType}]->(target)
                         ON CREATE SET r.createdAt = datetime()
 
                       // After ensuring the relationship, count other children of the source
                       WITH source, target
-                      OPTIONAL MATCH (source)-[:HAS_TOPIC]->(otherChild:Topic)
+                      OPTIONAL MATCH (source)-[:${relationshipType}]->(otherChild:${targetLabel})
                       WHERE otherChild <> target // Exclude the target itself from the count
                       WITH target, COUNT(otherChild) AS numOtherSiblings
                       
@@ -1981,13 +2171,23 @@ let relationshipType = 'RELATES_TO'; // Default relationship type
                       SET target.siblingOrder = numOtherSiblings + 1
                       RETURN target.siblingOrder AS newSiblingOrder
                     `;
-                  } else if (sourceNode.type === 'topicNode') {
-                     // Handle connections from topics (e.g., to Paper, CentralTopic)
+                  } else if (sourceNode.type === 'topicNode' || sourceNode.type === 'paragraphNode') {
+                     // Handle connections from topics or paragraphs (e.g., to Paper, CentralTopic)
                      // These typically don't involve siblingOrder for the target
-                     const sourceLabel = 'Topic';
+                     const sourceLabel = sourceNode.type === 'topicNode' ? 'Topic' : 'Paragraph';
                      const targetLabel = targetNode.type === 'centralTopicNode' ? 'CentralTopic' :
-                                      targetNode.type === 'paperNode' ? 'Paper' : 'Topic'; // Avoid Topic->Topic here?
-                     relationshipType = 'RELATES_TO_TOPIC'; // Or specific type
+                                      targetNode.type === 'paperNode' ? 'Paper' :
+                                      targetNode.type === 'topicNode' ? 'Topic' : 'Paragraph'; // Avoid self-loops or define specific logic
+                     // Determine a generic relationship type or specific based on source/target
+                     if (sourceLabel === 'Paragraph' && targetLabel === 'Topic') {
+                        relationshipType = 'RELATES_TO_TOPIC';
+                     } else if (sourceLabel === 'Topic' && targetLabel === 'Paragraph') {
+                        relationshipType = 'HAS_PARAGRAPH_REFERENCE'; // Example, can be more generic
+                     } else if (sourceLabel === 'Paragraph' && targetLabel === 'Paragraph') {
+                        relationshipType = 'RELATES_TO_PARAGRAPH'; // Example for Para->Para
+                     } else {
+                        relationshipType = 'RELATES_TO'; // Default generic
+                     }
                      query = `
                        MATCH (source:${sourceLabel}), (target:${targetLabel})
                        WHERE ID(source) = $sourceId AND ID(target) = $targetId
@@ -2010,49 +2210,47 @@ let relationshipType = 'RELATES_TO'; // Default relationship type
                     });
 
                     let newSiblingOrder = null;
-                    // Check if the query returned a new sibling order (only for HAS_TOPIC)
-                    if (relationshipType === 'HAS_TOPIC' && result && result.length > 0) {
+                    // Check if the query returned a new sibling order (for HAS_TOPIC or HAS_PARAGRAPH)
+                    if ((relationshipType === 'HAS_TOPIC' || relationshipType === 'HAS_PARAGRAPH') && result && result.length > 0) {
                        newSiblingOrder = result[0].get('newSiblingOrder')?.toNumber();
-                       console.log(`Assigned new siblingOrder: ${newSiblingOrder} to node ${targetNode.id}`);
+                       if (newSiblingOrder !== null && newSiblingOrder !== undefined) {
+                         console.log(`Assigned new siblingOrder: ${newSiblingOrder} to node ${targetNode.id}`);
+                       }
                     }
 
                     // Create and add visual edge
                     const newEdge = {
-                      id: `edge-${sourceType}-${sourceId}-${targetType}-${targetId}-${Date.now()}-${Math.random()}`,
+                      id: `edge-${sourceType}-${sourceId}-${targetType}-${targetId}-${relationshipType}-${Date.now()}-${Math.random()}`, // Added relationshipType for more unique ID
                       source: params.source,
                       target: params.target,
-                      type: 'floating', // Use floating edge type
-                      label: relationshipType, // Add label to edge
+                      type: 'floating',
+                      label: relationshipType,
                       animated: true,
                       markerEnd: { type: MarkerType.ArrowClosed },
                     };
 
                     // Log edge creation
                     console.log('Adding edge:', newEdge);
-
-                    // Update client state: add edge, update target node's siblingOrder, recalculate numbers
+                    
                     const finalEdges = addEdge(newEdge, edges);
-                    setEdges(finalEdges); // Update edges state
+                    setEdges(finalEdges);
 
                     // Update the target node's siblingOrder and recalculate display numbers
-                    if (targetNode.type === 'topicNode' && newSiblingOrder !== null && newSiblingOrder !== undefined) {
+                    if ((targetNode.type === 'topicNode' || targetNode.type === 'paragraphNode') && newSiblingOrder !== null && newSiblingOrder !== undefined) {
                       setNodes(prevNodes => {
                         const nodesWithUpdatedSiblingOrder = prevNodes.map(n =>
                           n.id === targetNode.id
                             ? { ...n, data: { ...n.data, siblingOrder: newSiblingOrder } }
                             : n
                         );
-                        console.log(`Updating client state for node ${targetNode.id} with siblingOrder: ${newSiblingOrder}`);
-                        // Now, recalculate display numbers with the updated nodes and the new edge
+                        console.log(`Updating client state for node ${targetNode.id} (type: ${targetNode.type}) with siblingOrder: ${newSiblingOrder}`);
                         return calculateDisplayNumbers(nodesWithUpdatedSiblingOrder, finalEdges);
                       });
                     } else {
-                      console.log(`No client-side siblingOrder update needed for target ${targetNode.id} (type: ${targetNode.type})`);
-                      // Even if no siblingOrder update, if an edge was added, display numbers might need recalculation
-                      // (e.g. if a non-topic was involved but structure changed)
-                      // However, for this specific issue, we focus on HAS_TOPIC.
-                      // If other edge types could affect numbering, this might need to be broader:
-                      // setNodes(prevNodes => calculateDisplayNumbers(prevNodes, finalEdges));
+                      // Even if no siblingOrder update for this specific node,
+                      // adding an edge might affect overall structure, so recalculate.
+                      console.log(`No specific siblingOrder update for target ${targetNode.id} (type: ${targetNode.type}), but recalculating numbers due to new edge.`);
+                      setNodes(prevNodes => calculateDisplayNumbers(prevNodes, finalEdges));
                     }
 } // End of if(query) block
                 } catch (error) {
@@ -2174,6 +2372,92 @@ let relationshipType = 'RELATES_TO'; // Default relationship type
               <button
                 onClick={handleCreateCentralTopic}
                 className="px-4 py-2 bg-orange-500 text-white rounded hover:bg-orange-600"
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Paragraph Popup */}
+      {showParagraphPopup && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 shadow-xl max-w-md w-full">
+            <h3 className="text-xl font-semibold mb-4">
+              {parentForNewParagraph ? 'Create Sub-Paragraph' : 'Create New Paragraph (Orphan)'}
+            </h3>
+            <textarea
+              value={newParagraphStatement}
+              onChange={(e) => setNewParagraphStatement(e.target.value)}
+              placeholder="Enter paragraph statement"
+              className="w-full p-2 border border-gray-300 rounded mb-4"
+              rows="3"
+            />
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => {
+                  setShowParagraphPopup(false);
+                  setNewParagraphStatement('');
+                  setParentForNewParagraph(null); // Reset parent
+                }}
+                className="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  if (!newParagraphStatement.trim()) {
+                    alert('Please enter a paragraph statement');
+                    return;
+                  }
+                  await handleCreateParagraphNode(parentForNewParagraph, newParagraphStatement.trim());
+                  // State clearing is done inside handleCreateParagraphNode
+                }}
+                className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Paragraph Popup */}
+      {showParagraphPopup && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 shadow-xl max-w-md w-full">
+            <h3 className="text-xl font-semibold mb-4">
+              {parentForNewParagraph ? 'Create Sub-Paragraph' : 'Create New Paragraph (Orphan)'}
+            </h3>
+            <textarea
+              value={newParagraphStatement}
+              onChange={(e) => setNewParagraphStatement(e.target.value)}
+              placeholder="Enter paragraph statement"
+              className="w-full p-2 border border-gray-300 rounded mb-4"
+              rows="3"
+            />
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => {
+                  setShowParagraphPopup(false);
+                  setNewParagraphStatement('');
+                  setParentForNewParagraph(null); // Reset parent
+                }}
+                className="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  if (!newParagraphStatement.trim()) {
+                    alert('Please enter a paragraph statement');
+                    return;
+                  }
+                  await handleCreateParagraphNode(parentForNewParagraph, newParagraphStatement.trim());
+                  // State clearing is done inside handleCreateParagraphNode
+                }}
+                className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
               >
                 Create
               </button>
