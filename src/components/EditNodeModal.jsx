@@ -15,7 +15,7 @@ const EditNodeModal = ({ node, isOpen, onClose, onSave }) => {
       importance: node?.data?.importance || 0,
       notes: node?.data?.notes || ''
     }),
-    ...(node?.type === 'topicNode' && {
+    ...((node?.type === 'topicNode' || node?.type === 'paragraphNode') && {
       siblingOrder: node?.data?.siblingOrder || 1
     })
   });
@@ -117,10 +117,10 @@ const EditNodeModal = ({ node, isOpen, onClose, onSave }) => {
           </>
         )}
 
-        {node?.type === 'topicNode' && (
+        {(node?.type === 'topicNode' || node?.type === 'paragraphNode') && (
           <div>
             <label htmlFor="siblingOrder" className="block text-sm font-medium text-gray-700">
-              Sequence Order
+              Sequence Order {node?.data?.displayNumber && <span className="text-gray-500">- Current: {node.data.displayNumber}</span>}
             </label>
             <input
               type="number"
