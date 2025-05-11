@@ -1102,14 +1102,26 @@ function App() {
       setPdfContent({ pages: pagesContent, title: file.name });
 
       try {
+        // First check if paper with same title exists
+        const existingPaper = await executeQuery(
+          'MATCH (p:Paper {title: $title}) RETURN p',
+          { title: file.name }
+        );
+
+        if (existingPaper.length > 0) {
+          alert('A paper with this title already exists in the database.');
+          return;
+        }
+
+        // If no duplicate found, create the new paper
         const result = await executeQuery(
           'CREATE (p:Paper {title: $title, author: $author, uploadedAt: datetime(), positionX: $positionX, positionY: $positionY, localPath: $localPath}) RETURN ID(p) as id, elementId(p) as elementId',
           {
             title: file.name,
-            author: 'Unknown', 
+            author: 'Unknown',
             positionX: getRandomPosition().x,
             positionY: getRandomPosition().y,
-            localPath: URL.createObjectURL(file) 
+            localPath: URL.createObjectURL(file)
           }
         );
         const newPaperId = result[0].get('id').toNumber();
@@ -1130,7 +1142,8 @@ function App() {
         setCurrentPaperId(newPaperId); 
         // setCurrentPaperTitle(file.name); // This was the unused state setter
       } catch (error) {
-        console.error('Error creating Paper node in Neo4j:', error);
+        console.error('Error handling paper upload:', error);
+        alert('Error uploading paper: ' + error.message);
       }
     } else {
       alert('Please select a PDF file.');

@@ -9,6 +9,9 @@ import process from 'node:process'; // Import process
 
 dotenv.config();
 
+// In-memory store for papers (simulating a database)
+const papers = [];
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -30,6 +33,43 @@ const app = express();
 
 // Enable CORS for all routes (suitable for local development)
 app.use(cors());
+app.use(express.json()); // Middleware to parse JSON bodies
+
+// --- Paper Management ---
+
+// Function to check if a paper with the given title already exists
+const doesPaperExist = (title) => {
+    return papers.some(paper => paper.title.toLowerCase() === title.toLowerCase());
+};
+
+// API Endpoint to Create a New Paper
+// Example: POST http://localhost:3001/api/papers
+// Body: { "title": "My New Paper Title", "filename": "my-new-paper.pdf" }
+app.post('/api/papers', (req, res) => {
+    const { title, filename } = req.body;
+
+    if (!title || !filename) {
+        return res.status(400).send({ error: 'Title and filename are required.' });
+    }
+
+    if (doesPaperExist(title)) {
+        return res.status(409).send({ error: `Paper with title "${title}" already exists.` });
+    }
+
+    const newPaper = { id: String(papers.length + 1), title, filename, createdAt: new Date() };
+    papers.push(newPaper);
+    console.log(`Paper created: ${title} (${filename})`);
+    res.status(201).send(newPaper);
+});
+
+// API Endpoint to List All Papers (for testing/verification)
+// Example: GET http://localhost:3001/api/papers
+app.get('/api/papers', (req, res) => {
+    res.status(200).json(papers);
+});
+
+
+// --- PDF Serving ---
 
 // API Endpoint to Serve PDFs
 // Example: GET http://localhost:3001/api/pdfs/my-document.pdf
