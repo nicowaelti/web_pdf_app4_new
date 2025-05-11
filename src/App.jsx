@@ -588,7 +588,7 @@ function App() {
         case 'paper': label = 'Paper'; break;
         case 'topic': label = 'Topic'; break;
         case 'central-topic': label = 'CentralTopic'; break;
-        case 'reference': label = 'ReferencedText'; break;
+        case 'referenceNode': label = 'ReferencedText'; break;
         case 'paragraph': label = 'Paragraph'; break;
         default: throw new Error(`Unknown node type prefix: ${nodeTypePrefix}`);
       }
