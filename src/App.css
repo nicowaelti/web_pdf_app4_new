@@ -20,7 +20,7 @@
 
 .workspace {
   height: 100%;
-  overflow: hidden;
+  /* overflow: hidden; */ /* Removed to allow child elements to scroll independently */
 }
 
 .logo {

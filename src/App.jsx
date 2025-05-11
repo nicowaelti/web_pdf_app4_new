@@ -1400,7 +1400,7 @@ function App() {
         onToggleImportantPapers={() => setShowImportantPapers(!showImportantPapers)}
         onExportRtf={handleExportRtfFromMenu} 
       />
-      <div className="flex flex-grow pt-16"> {/* pt-16 to offset fixed header */}
+      <div className="flex flex-grow pt-16 overflow-hidden"> {/* pt-16 to offset fixed header */}
         {/* Left Workspace */}
         <div
           ref={leftWorkspaceRef}
@@ -1516,7 +1516,7 @@ function App() {
 
         {/* Right Workspace */}
         <div
-          className="workspace p-6"
+          className="workspace p-6 overflow-y-auto"
           style={{ width: `${100 - leftWidth}%` }}
         >
           <h2 className="text-xl font-semibold mb-4 text-gray-800">Flow Workspace</h2>
