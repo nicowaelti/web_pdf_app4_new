@@ -1,6 +1,21 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
-const Header = ({ dbStatus, onFileUpload, onNewTopic, onNewCentralTopic, onNewParagraph, showImportantPapers, onToggleImportantPapers }) => {
+const Header = ({ dbStatus, onFileUpload, onNewTopic, onNewCentralTopic, onNewParagraph, showImportantPapers, onToggleImportantPapers, onExportRtf }) => {
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
+        setIsMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
   return (
     <nav className="fixed top-0 left-0 right-0 bg-gray-800 text-white py-2 px-4 z-50">
       <div className="flex items-center justify-between max-w-7xl mx-auto">
@@ -51,14 +66,30 @@ const Header = ({ dbStatus, onFileUpload, onNewTopic, onNewCentralTopic, onNewPa
           >
             {showImportantPapers ? 'Show All Papers' : 'Important Papers'}
           </button>
-          <button
-            className="px-4 py-1.5 bg-pink-500 hover:bg-pink-400 text-white font-bold rounded-lg
-                       transform transition-all duration-300 ease-in-out hover:-translate-y-0.5
-                       border border-pink-400 hover:border-pink-300 hover:shadow-lg"
-            onClick={() => alert('Menu clicked!')}
-          >
-            Menu ▾
-          </button>
+          <div className="relative" ref={menuRef}>
+            <button
+              className="px-4 py-1.5 bg-pink-500 hover:bg-pink-400 text-white font-bold rounded-lg
+                         transform transition-all duration-300 ease-in-out hover:-translate-y-0.5
+                         border border-pink-400 hover:border-pink-300 hover:shadow-lg"
+              onClick={() => setIsMenuOpen(!isMenuOpen)}
+            >
+              Menu ▾
+            </button>
+            {isMenuOpen && (
+              <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50 text-gray-700">
+                <button
+                  onClick={() => {
+                    onExportRtf();
+                    setIsMenuOpen(false);
+                  }}
+                  className="block w-full text-left px-4 py-2 text-sm hover:bg-gray-100"
+                >
+                  Export to RTF
+                </button>
+                {/* Add other menu items here if needed */}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </nav>

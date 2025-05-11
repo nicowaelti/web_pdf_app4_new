@@ -2,6 +2,7 @@ import React from 'react';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import EditNodeModal from './components/EditNodeModal';
 import { initializeDriver, executeQuery, closeDriver } from './utils/neo4jConnection';
+import { exportGraphToRtf } from './features/rtfExport/rtfExporter.js';
 
 // Utility function to clamp a number between min and max values
 const clamp = (num, min, max) => Math.min(Math.max(num, min), max);
@@ -145,9 +146,6 @@ const paragraphNodeStyle = {
 };
 
 const TopicNode = React.memo(({ data }) => {
-  // Log to see exactly what TopicNode receives
-  // The 'id' prop is passed directly by React Flow, not typically in data for custom nodes unless specifically put there.
-  // For logging, we'll try to access a known unique property from data if available, or just log what's in data.
   console.log(`TopicNode rendering: Label=${data.label}, DisplayNumber=${data.displayNumber}, SiblingOrder=${data.siblingOrder}, FullData=${JSON.stringify(data)}`);
   return (
     <>
@@ -204,7 +202,6 @@ const PaperNode = React.memo(({ data }) => (
   </>
 ));
 
-// Define nodeTypes outside component to prevent unnecessary recreation
 const CentralTopicNode = React.memo(({ data }) => (
   <>
     <Handle type="target" position={Position.Left} />
@@ -251,34 +248,30 @@ const nodeTypes = {
 };
 
 const edgeTypes = {
-  floating: SimpleFloatingEdge
+  floating: SimpleFloatingEdge,
+  simpleFloatingEdge: SimpleFloatingEdge // Added to fix console warning
 };
 
-// Function to calculate display numbers for Topic nodes
 const calculateDisplayNumbers = (nodes, edges) => {
-  // Initialize all nodes without display numbers
   const nodeMap = new Map(nodes.map(n => [n.id, {
     ...n,
     data: {
       ...n.data,
-      displayNumber: undefined  // Clear any existing display numbers
+      displayNumber: undefined
     },
     children: []
   }]));
   const centralTopic = nodes.find(n => n.type === 'centralTopicNode');
 
-  if (!centralTopic) return nodes; // No central topic, nothing to number
+  if (!centralTopic) return nodes;
 
-  // Build adjacency list only for actual HAS_TOPIC relationships
   edges.forEach(edge => {
     if (edge.type === 'floating' && (edge.label === 'HAS_TOPIC' || edge.label === 'HAS_PARAGRAPH')) {
       const parentNode = nodeMap.get(edge.source);
       const childNode = nodeMap.get(edge.target);
-      // Only build parent-child relationship for valid connections
       if (parentNode && childNode &&
           (parentNode.type === 'centralTopicNode' || parentNode.type === 'topicNode') &&
           (childNode.type === 'topicNode' || childNode.type === 'paragraphNode')) {
-        // Add to children array only if it has a valid siblingOrder
         if (childNode.data.siblingOrder !== undefined && childNode.data.siblingOrder !== null) {
           parentNode.children.push(childNode);
         }
@@ -290,84 +283,74 @@ const calculateDisplayNumbers = (nodes, edges) => {
     const parentNode = nodeMap.get(parentId);
     if (!parentNode || !parentNode.children) return;
 
-    // Sort children by siblingOrder
     const sortedChildren = parentNode.children
       .filter(child => (child.type === 'topicNode' || child.type === 'paragraphNode') && child.data.siblingOrder !== undefined && child.data.siblingOrder !== null)
       .sort((a, b) => a.data.siblingOrder - b.data.siblingOrder);
 
     sortedChildren.forEach((child) => {
-      // The actual siblingOrder from data should be used for numbering, not the loop index directly
-      // but for display, we use its sorted position.
-      // The plan is to use siblingOrder directly for the number part.
       const currentNumber = child.data.siblingOrder;
-      // Log inputs to calculation
       console.log(`[recursivelyAssignNumbers] Calculating for ${child.id}: parentDisplayNumber=${parentDisplayNumber}, currentNumber=${currentNumber}`);
-      const displayNumber = parentDisplayNumber !== '' ? `${parentDisplayNumber}${currentNumber}.` : `${currentNumber}.`; // Check parentDisplayNumber explicitly for empty string
+      const displayNumber = parentDisplayNumber !== '' ? `${parentDisplayNumber}${currentNumber}.` : `${currentNumber}.`;
 
       const originalChildNode = nodeMap.get(child.id);
       if (originalChildNode) {
-        // Ensure we're creating a new data object for the update
         originalChildNode.data = {
           ...originalChildNode.data,
           displayNumber: displayNumber
         };
-        // Log right after assignment
         console.log(`[recursivelyAssignNumbers] Assigned to ${originalChildNode.id}: displayNumber=${displayNumber}, SiblingOrder=${originalChildNode.data.siblingOrder}, FullData=${JSON.stringify(originalChildNode.data)}`);
-        
-        // The nodeMap holds the reference, so this update to originalChildNode.data should be reflected
-        // when Array.from(nodeMap.values()) is called.
         recursivelyAssignNumbers(child.id, displayNumber);
       }
     });
   };
 
-  recursivelyAssignNumbers(centralTopic.id, ''); // Start recursion from CentralTopic
+  recursivelyAssignNumbers(centralTopic.id, '');
 
   const resultNodes = Array.from(nodeMap.values());
   console.log('[calculateDisplayNumbers] Resulting nodes:', JSON.stringify(resultNodes.map(n => ({id: n.id, label: n.data.label, displayNumber: n.data.displayNumber, siblingOrder: n.data.siblingOrder }))));
   return resultNodes;
 };
 
-// Initial states
 const initialNodes = [];
 const initialEdges = [];
 
 function App() {
-  // Basic state for node management
   const [nodes, setNodes] = useState(initialNodes);
   const [edges, setEdges] = useState(initialEdges);
   const [selectedNode, setSelectedNode] = useState(null);
-
-  // UI state
   const [showImportantPapers, setShowImportantPapers] = useState(false);
   const [dbStatus, setDbStatus] = useState('connecting');
   const [currentPaperId, setCurrentPaperId] = useState(null);
-  const [currentPaperTitle, setCurrentPaperTitle] = useState('');
+  // const [currentPaperTitle, setCurrentPaperTitle] = useState(''); // Removed unused state
   const [editNode, setEditNode] = useState(null);
-  const [showTopicPopup, setShowTopicPopup] = useState(false); // This will now be for adding sub-topics
+  const [showTopicPopup, setShowTopicPopup] = useState(false);
   const [showCentralTopicPopup, setShowCentralTopicPopup] = useState(false);
-  const [newTopicName, setNewTopicName] = useState(''); // For general new topics / sub-topics
+  const [newTopicName, setNewTopicName] = useState('');
   const [newCentralTopicName, setNewCentralTopicName] = useState('');
-  const [parentForNewTopic, setParentForNewTopic] = useState(null); // To store parent when creating a sub-topic
+  const [parentForNewTopic, setParentForNewTopic] = useState(null);
   const [showParagraphPopup, setShowParagraphPopup] = useState(false);
   const [newParagraphStatement, setNewParagraphStatement] = useState('');
   const [parentForNewParagraph, setParentForNewParagraph] = useState(null);
-
-  // Node Context Menu State
   const [showNodeContextMenu, setShowNodeContextMenu] = useState(false);
   const [nodeContextMenuPosition, setNodeContextMenuPosition] = useState({ x: 0, y: 0 });
   const [contextNodeForMenu, setContextNodeForMenu] = useState(null);
-
-  // Workspace state
   const [isDragging, setIsDragging] = useState(false);
   const [leftWidth, setLeftWidth] = useState(50);
   const [pdfContent, setPdfContent] = useState({ pages: [] });
+  const [selectedText, setSelectedText] = useState('');
+  const [showContextMenu, setShowContextMenu] = useState(false);
+  const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
+  const leftWorkspaceRef = useRef(null);
+  const dragRef = useRef(null);
 
-  // Add click-outside handler for context menu
+
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (showNodeContextMenu && !event.target.closest('.context-menu')) {
         setShowNodeContextMenu(false);
+      }
+      if (showContextMenu && !event.target.closest('.context-menu-pdf')) {
+        setShowContextMenu(false);
       }
     };
 
@@ -375,14 +358,13 @@ function App() {
     return () => {
       document.removeEventListener('click', handleClickOutside);
     };
-  }, [showNodeContextMenu]);
+  }, [showNodeContextMenu, showContextMenu]);
 
   const handleUpdateNode = async (formData) => {
     try {
       const nodeId = editNode.id.split('-')[1];
       const nodeType = editNode.type.replace('Node', '');
       
-      // Update in Neo4j based on node type
       const label = nodeType === 'paper' ? 'Paper' :
                    nodeType === 'topic' ? 'Topic' :
                    nodeType === 'central-topic' ? 'CentralTopic' :
@@ -397,9 +379,8 @@ function App() {
       const newSiblingOrder = parseInt(formData.siblingOrder || 1);
 
       if (nodeType === 'topic' && oldSiblingOrder !== undefined && oldSiblingOrder !== newSiblingOrder) {
-        // Find parent node ID (Neo4j ID)
         let parentNeo4jId = null;
-        const parentEdge = edges.find(edge => edge.target === editNode.id && (edge.label === 'HAS_TOPIC' || edge.type === 'floating')); // Assuming HAS_TOPIC edges
+        const parentEdge = edges.find(edge => edge.target === editNode.id && (edge.label === 'HAS_TOPIC' || edge.type === 'floating'));
         if (parentEdge) {
           const parentIdParts = parentEdge.source.split('-');
           parentNeo4jId = parseInt(parentIdParts[parentIdParts.length - 1]);
@@ -407,24 +388,19 @@ function App() {
 
         if (parentNeo4jId !== null) {
           console.log(`Reordering topic ${nodeId}: from ${oldSiblingOrder} to ${newSiblingOrder}, parent ${parentNeo4jId}`);
-          // IMPORTANT: This query reorders siblings.
           await executeQuery(
             `MATCH (parent) WHERE ID(parent) = $parentNeo4jId
             MATCH (movedNode:Topic) WHERE ID(movedNode) = $movedNodeId
-            
             MATCH (parent)-[:HAS_TOPIC]->(sibling:Topic)
             WITH movedNode, $newSiblingOrder AS newOrder, $oldSiblingOrder AS oldOrder, parent, COLLECT({node: sibling, order: sibling.siblingOrder}) AS siblingsList
-            
             UNWIND siblingsList AS s
             WITH movedNode, newOrder, oldOrder, parent, s.node AS siblingNode, s.order AS currentOrder
-            
             SET siblingNode.siblingOrder = CASE
               WHEN siblingNode = movedNode THEN newOrder
               WHEN oldOrder < newOrder AND currentOrder > oldOrder AND currentOrder <= newOrder THEN currentOrder - 1
               WHEN oldOrder > newOrder AND currentOrder >= newOrder AND currentOrder < oldOrder THEN currentOrder + 1
               ELSE currentOrder
             END
-            // Also update the name of the moved node as it might have changed too
             WITH movedNode, $label AS nodeName
             SET movedNode.name = nodeName`,
             {
@@ -432,11 +408,10 @@ function App() {
               movedNodeId: parseInt(nodeId),
               oldSiblingOrder: oldSiblingOrder,
               newSiblingOrder: newSiblingOrder,
-              label: formData.label // Pass label for name update
+              label: formData.label
             }
           );
 
-          // Re-fetch the parent and its children to get updated siblingOrder for all
           const affectedNodesResult = await executeQuery(
             `MATCH (parent) WHERE ID(parent) = $parentNeo4jId
              OPTIONAL MATCH (parent)-[:HAS_TOPIC]->(child:Topic)
@@ -455,32 +430,25 @@ function App() {
             const childrenDataFromDb = affectedNodesResult[0].get('childrenData');
             
             setNodes(prevNodes => {
-              // Create a map of DB children for efficient lookup
               const dbChildrenMap = new Map();
               childrenDataFromDb.forEach(childDbRaw => {
                 dbChildrenMap.set(`topic-${safeConvertNeoInt(childDbRaw.id)}`, {
                   name: childDbRaw.name,
                   siblingOrder: safeConvertNeoInt(childDbRaw.siblingOrder),
-                  // positionX: safeConvertNeoInt(childDbRaw.positionX, 0), // Example if positions are managed
-                  // positionY: safeConvertNeoInt(childDbRaw.positionY, 0), // Example
                 });
               });
 
               return prevNodes.map(n => {
                 const dbChildData = dbChildrenMap.get(n.id);
-                if (dbChildData) { // This node is one of the children of the parent
+                if (dbChildData) {
                   const isMovedNode = n.id === editNode.id;
                   return {
                     ...n,
                     data: {
                       ...n.data,
-                      label: isMovedNode ? formData.label : dbChildData.name, // Prioritize formData label for moved node
-                      siblingOrder: dbChildData.siblingOrder, // Authoritative from DB after reorder
-                      // Apply other formData fields if it's the moved node and a topic
-                      ...(isMovedNode && nodeType === 'topic' && {
-                        // other topic-specific fields from formData if any, besides label/siblingOrder
-                      }),
-                      // Common fields from formData if it's the moved node (for other types, though less likely here)
+                      label: isMovedNode ? formData.label : dbChildData.name,
+                      siblingOrder: dbChildData.siblingOrder,
+                      ...(isMovedNode && nodeType === 'topic' && {}),
                       ...(isMovedNode && nodeType === 'referenceNode' && { fullText: formData.fullText }),
                       ...(isMovedNode && nodeType === 'paperNode' && {
                         importance: parseInt(formData.importance || 0),
@@ -489,499 +457,303 @@ function App() {
                     }
                   };
                 }
-                // If it's the edited node but NOT part of the fetched children (e.g. reparented, though not this operation)
-                // or if re-fetch failed and this is the fallback path, update from formData.
-                // This specific block is now covered by the `else` for re-fetch failure.
-                // However, if a node IS the editNode.id but NOT a child of parentNeo4jId, it means something else.
-                // For this reorder logic, we assume editNode.id IS a child of parentNeo4jId.
                 return n;
               });
             });
           } else {
-            // Re-fetch failed, fall back to updating only the edited node with formData
-            console.warn('Re-fetch of affected siblings failed after reorder. Updating only the moved node on client from formData.');
-            setNodes(prevNodes =>
-              prevNodes.map(node => {
-                if (node.id === editNode.id) {
-                  return {
-                    ...node,
-                    data: {
-                      ...node.data,
-                      label: formData.label,
-                      ...(nodeType === 'referenceNode' && { fullText: formData.fullText }),
-                      ...(nodeType === 'paperNode' && {
-                        importance: parseInt(formData.importance || 0),
-                        notes: formData.notes || ''
-                      }),
-                      ...(nodeType === 'topic' && { siblingOrder: newSiblingOrder })
-                    }
-                  };
-                }
-                return node;
-              })
-            );
-          }
-        } else { // parentNeo4jId is null (topic reorder but parent not found client-side)
-          console.warn(`Could not find parent for topic ${editNode.id} to reorder siblings.`);
-          // Fallback to simple DB update for the single node
-          await executeQuery(
-            `MATCH (n:Topic) WHERE ID(n) = $nodeId
-            SET n.name = $label, n.siblingOrder = $siblingOrder`,
-            { nodeId: parseInt(nodeId), label: formData.label, siblingOrder: newSiblingOrder }
-          );
-          // Client-side update for the single node from formData
-          setNodes(prevNodes =>
-            prevNodes.map(node => {
-              if (node.id === editNode.id) {
+            setNodes(prevNodes => prevNodes.map(n => {
+              if (n.id === editNode.id) {
                 return {
-                  ...node,
+                  ...n,
                   data: {
-                    ...node.data,
+                    ...n.data,
                     label: formData.label,
-                    ...(nodeType === 'topic' && { siblingOrder: newSiblingOrder })
+                    siblingOrder: newSiblingOrder, 
+                    ...(nodeType === 'referenceNode' && { fullText: formData.fullText }),
+                    ...(nodeType === 'paperNode' && {
+                      importance: parseInt(formData.importance || 0),
+                      notes: formData.notes || ''
+                    }),
                   }
                 };
               }
-              return node;
-            })
-          );
-        }
-      } else { // Not a topic reorder OR siblingOrder didn't change for a topic
-        // Standard DB update for non-topic nodes or if siblingOrder hasn't changed for a topic
-        let updateQuery;
-        const queryParams = {
-          nodeId: parseInt(nodeId),
-        };
-
-        if (nodeType === 'paragraph') {
-          updateQuery = `
-            MATCH (n:Paragraph)
-            WHERE ID(n) = $nodeId
-            SET n.Statement = $statement`;
-          queryParams.statement = formData.label; // formData.label holds the statement for paragraphs
-        } else {
-          updateQuery = `
+              return n;
+            }));
+          }
+        } else { 
+          const query = `
             MATCH (n:${label})
             WHERE ID(n) = $nodeId
-            SET n.name = $name`;
-          queryParams.name = formData.label;
-
-          if (nodeType === 'reference') {
-            updateQuery += ', n.text = $fullText';
-            queryParams.fullText = formData.fullText;
-          } else if (nodeType === 'paper') {
-            updateQuery += ', n.importance = $importance, n.notes = $notes';
-            queryParams.importance = parseInt(formData.importance || 0);
-            queryParams.notes = formData.notes || '';
-          } else if (nodeType === 'topic') {
-            // This case implies oldSiblingOrder === newSiblingOrder for a topic
-            // or it's a CentralTopic which doesn't have siblingOrder managed this way.
-            if (label === 'Topic' && oldSiblingOrder === newSiblingOrder) {
-               updateQuery += ', n.siblingOrder = $siblingOrder';
-               queryParams.siblingOrder = newSiblingOrder;
-            }
-          }
+            SET n.name = $label
+            ${nodeType === 'referenceNode' ? ', n.text = $fullText' : ''}
+            ${nodeType === 'paperNode' ? ', n.importance = $importance, n.notes = $notes' : ''}
+            ${(nodeType === 'topic' || nodeType === 'paragraph') ? ', n.siblingOrder = $siblingOrder' : ''}
+            RETURN n
+          `;
+          await executeQuery(query, {
+            nodeId: parseInt(nodeId),
+            label: formData.label,
+            fullText: formData.fullText,
+            importance: parseInt(formData.importance || 0),
+            notes: formData.notes || '',
+            siblingOrder: newSiblingOrder
+          });
+          setNodes(prevNodes => prevNodes.map(n =>
+            n.id === editNode.id
+              ? { ...n, data: { ...n.data, ...formData, siblingOrder: newSiblingOrder } } 
+              : n
+          ));
         }
-        
-        await executeQuery(updateQuery, queryParams);
-        // Client-side update for the single edited node from formData
-        setNodes(prevNodes =>
-          prevNodes.map(node => {
-            if (node.id === editNode.id) {
-              return {
-                ...node,
-                data: {
-                  ...node.data,
-                  label: formData.label, // This is correct as 'label' in UI maps to 'name' or 'Statement'
-                  ...(nodeType === 'reference' && { fullText: formData.fullText }), // 'referenceNode' not 'reference'
-                  ...(nodeType === 'paper' && { // 'paperNode' not 'paper'
-                    importance: parseInt(formData.importance || 0),
-                    notes: formData.notes || ''
-                  }),
-                  ...(nodeType === 'topic' && { siblingOrder: newSiblingOrder }), // 'topicNode' not 'topic'
-                  // No specific client-side data change needed for 'paragraph' beyond 'label'
-                }
-              };
-            }
-            return node;
-          })
-        );
+      } else { 
+          const query = `
+            MATCH (n:${label})
+            WHERE ID(n) = $nodeId
+            SET n.name = $label 
+            ${nodeType === 'referenceNode' ? ', n.text = $fullText' : ''}
+            ${nodeType === 'paperNode' ? ', n.importance = $importance, n.notes = $notes' : ''}
+            ${(nodeType === 'topic' || nodeType === 'paragraph' || nodeType === 'central-topic') ? ', n.siblingOrder = $siblingOrder' : ''}
+            RETURN n
+          `;
+          await executeQuery(query, {
+            nodeId: parseInt(nodeId),
+            label: formData.label,
+            fullText: formData.fullText,
+            importance: parseInt(formData.importance || 0),
+            notes: formData.notes || '',
+            siblingOrder: newSiblingOrder
+          });
+        setNodes(prevNodes => prevNodes.map(n =>
+          n.id === editNode.id
+            ? { ...n, data: { ...n.data, ...formData, siblingOrder: newSiblingOrder } }
+            : n
+        ));
       }
-      
-      // Recalculate display numbers after any node update path
-      setNodes(currentNodes => calculateDisplayNumbers(currentNodes, edges));
+      setNodes(prevNodes => calculateDisplayNumbers(prevNodes, edges));
       setEditNode(null);
     } catch (error) {
       console.error('Error updating node:', error);
-      alert('Failed to update node');
+      alert('Failed to update node: ' + error.message);
     }
   };
 
   const handleCreateCentralTopic = async () => {
-    if (!newCentralTopicName.trim()) return;
-
+    if (!newCentralTopicName.trim()) {
+      alert('Please enter a central topic name');
+      return;
+    }
     try {
       const result = await executeQuery(
-        `
-        CREATE (ct:CentralTopic {
-          name: $name,
-          positionX: $positionX,
-          positionY: $positionY,
-          createdAt: datetime()
-        })
-        RETURN ID(ct) as topicId
-        `,
+        'CREATE (ct:CentralTopic {name: $name, positionX: $positionX, positionY: $positionY, createdAt: datetime()}) RETURN ID(ct) as id, elementId(ct) as elementId, ct.name as name, ct.positionX as positionX, ct.positionY as positionY, ct.createdAt as createdAt',
         {
-          name: newCentralTopicName,
+          name: newCentralTopicName.trim(),
           positionX: getRandomPosition().x,
           positionY: getRandomPosition().y
         }
       );
+      const record = result[0];
+      const newId = record.get('id').toNumber();
+      const elementId = record.get('elementId');
 
-      const topicId = result[0].get('topicId').toNumber();
       const newNode = {
-        id: `central-topic-${topicId}`,
+        id: `central-topic-${newId}`,
         type: 'centralTopicNode',
-        position: { x: getRandomPosition().x, y: getRandomPosition().y },
+        position: { x: record.get('positionX'), y: record.get('positionY') },
         data: {
-          label: newCentralTopicName,
+          label: record.get('name'),
+          rawElementId: elementId,
+          createdAt: record.get('createdAt').toString(),
           onRename: async (newName) => {
-            try {
-              await executeQuery(
-                `
-                MATCH (ct:CentralTopic)
-                WHERE ID(ct) = $topicId
-                SET ct.name = $newName
-                `, // End of query template literal
-                { topicId, newName } // parameters for executeQuery
-              ); // end executeQuery
-              setNodes(prev => // start setNodes
-                prev.map(node => // start map
-                  node.id === `central-topic-${safeConvertNeoInt(topicId)}`
-                    ? { ...node, data: { ...node.data, label: newName } }
-                    : node
-                ) // end map
-              ); // end setNodes
-            } catch (error) { // catch for onRename
-              console.error('Error renaming central topic:', error);
-              alert('Failed to rename central topic');
-            } // end catch for onRename
-          } // Close onRename function
-        } // Close data object
-      }; // Close newNode object
-
-      setNodes(prev => [...prev, newNode]); // Add the new central topic node
+            await executeQuery('MATCH (n) WHERE ID(n) = $id SET n.name = $newName', { id: newId, newName });
+            setNodes(nds => nds.map(n => n.id === `central-topic-${newId}` ? { ...n, data: { ...n.data, label: newName } } : n));
+          }
+        },
+      };
+      setNodes((nds) => nds.concat(newNode));
       setNewCentralTopicName('');
       setShowCentralTopicPopup(false);
-    } catch (error) { // Catch for handleCreateCentralTopic's try
-      console.error('Error creating central topic:', error);
-      alert('Failed to create central topic');
-    } // end catch for handleCreateCentralTopic
-  }; // Close handleCreateCentralTopic function
-
-// Correctly starting handleDeleteNode after closing handleCreateCentralTopic
-const handleDeleteNode = async (nodeToDelete) => {
-    if (!nodeToDelete) return;
-
-    const nodeId = nodeToDelete.id.split('-')[1];
-    const nodeType = nodeToDelete.type.replace('Node', '');
-    const label = nodeType === 'paper' ? 'Paper' :
-                  nodeType === 'topic' ? 'Topic' :
-                  nodeType === 'central-topic' ? 'CentralTopic' :
-                  nodeType === 'reference' ? 'ReferencedText' : null;
-
-    if (!label) {
-      console.error('Cannot delete node with unknown label:', nodeType);
-      return;
-    }
-
-    const confirmDelete = window.confirm(`Are you sure you want to delete this ${nodeType}?`);
-    if (!confirmDelete) return;
-
-    try {
-      if (label === 'Topic') {
-        // Special handling for Topics to reorder siblings
-        const oldSiblingOrder = nodeToDelete.data.siblingOrder;
-        let parentNeo4jId = null;
-        const parentEdge = edges.find(edge => edge.target === nodeToDelete.id && (edge.label === 'HAS_TOPIC' || edge.type === 'floating'));
-        if (parentEdge) {
-          const parentIdParts = parentEdge.source.split('-');
-          parentNeo4jId = parseInt(parentIdParts[parentIdParts.length - 1]);
-        }
-
-        if (parentNeo4jId !== null && oldSiblingOrder !== undefined) {
-          console.log(`Deleting topic ${nodeId} (order ${oldSiblingOrder}) from parent ${parentNeo4jId}`);
-          // Query to decrement siblingOrder for subsequent siblings and delete the node
-          await executeQuery(
-            `
-            MATCH (parent) WHERE ID(parent) = $parentNeo4jId
-            MATCH (parent)-[rel:HAS_TOPIC]->(target:Topic) WHERE ID(target) = $targetId
-            
-            // Find siblings that need their order decremented
-            MATCH (parent)-[:HAS_TOPIC]->(sibling:Topic)
-            WHERE sibling.siblingOrder > $oldSiblingOrder
-            
-            // Decrement order for those siblings
-            SET sibling.siblingOrder = sibling.siblingOrder - 1
-            
-            // Detach and delete the target node
-            WITH target, rel
-            DETACH DELETE target
-            `, 
-            // Note: Deleting the relationship 'rel' is implicitly handled by DETACH DELETE target
-            {
-              parentNeo4jId: parentNeo4jId,
-              targetId: parseInt(nodeId),
-              oldSiblingOrder: oldSiblingOrder
-            }
-          );
-        } else {
-          // Fallback or orphan topic deletion (no reordering needed)
-          console.log(`Deleting orphan topic ${nodeId} or parent not found.`);
-          await executeQuery(
-            `MATCH (n:Topic) WHERE ID(n) = $targetId DETACH DELETE n`,
-            { targetId: parseInt(nodeId) }
-          );
-        }
-      } else {
-        // Generic deletion for other node types
-        console.log(`Deleting ${label} node ${nodeId}`);
-        await executeQuery(
-          `MATCH (n:${label}) WHERE ID(n) = $targetId DETACH DELETE n`,
-          { targetId: parseInt(nodeId) }
-        );
-      }
-
-      // Update client state: remove node and connected edges
-      setNodes(nds => nds.filter(n => n.id !== nodeToDelete.id));
-      setEdges(eds => eds.filter(e => e.source !== nodeToDelete.id && e.target !== nodeToDelete.id));
-      
-      // Recalculate display numbers after deletion might affect siblings
-      // Need to ensure the nodes passed here reflect the deletion
-      setNodes(currentNodes => calculateDisplayNumbers(currentNodes.filter(n => n.id !== nodeToDelete.id), edges.filter(e => e.source !== nodeToDelete.id && e.target !== nodeToDelete.id)));
-
     } catch (error) {
-      console.error(`Error deleting ${nodeType}:`, error);
-      alert(`Failed to delete ${nodeType}.`);
+      console.error('Error creating central topic:', error);
+      alert('Failed to create central topic: ' + error.message);
     }
   };
 
-  const handleCreateTopicNode = async (parentId, topicName) => {
-    if (!topicName.trim()) {
-      alert('Topic name is required.');
-      return;
-    }
-
-    // Allow orphan topics
-    if (!parentId) {
-      console.log('Creating orphan topic...');
-    }
-
-    let position = getRandomPosition();
-    let query;
-    let params;
-
+  const handleDeleteNode = async (nodeToDelete) => {
     try {
-      if (parentId) {
-        // Creating a child topic
-        const parentIdParts = parentId.split('-');
+      const parts = nodeToDelete.id.split('-');
+      const nodeId = parseInt(parts[parts.length - 1]);
+      const nodeTypePrefix = parts.slice(0, -1).join('-');
+      
+      let label;
+      switch (nodeTypePrefix) {
+        case 'paper': label = 'Paper'; break;
+        case 'topic': label = 'Topic'; break;
+        case 'central-topic': label = 'CentralTopic'; break;
+        case 'reference': label = 'ReferencedText'; break;
+        case 'paragraph': label = 'Paragraph'; break;
+        default: throw new Error(`Unknown node type prefix: ${nodeTypePrefix}`);
+      }
+
+      await executeQuery(
+        `MATCH (n:${label}) WHERE ID(n) = $nodeId DETACH DELETE n`,
+        { nodeId }
+      );
+      setNodes((nds) => nds.filter((n) => n.id !== nodeToDelete.id));
+      setEdges((eds) => eds.filter((e) => e.source !== nodeToDelete.id && e.target !== nodeToDelete.id));
+      setNodes(prevNodes => calculateDisplayNumbers(prevNodes, edges));
+
+    } catch (error) {
+      console.error('Error deleting node:', error);
+      alert('Failed to delete node: ' + error.message);
+    }
+  };
+  
+  const handleCreateTopicNode = async (parent, topicName) => {
+    try {
+      let newTopicId;
+      let newTopicElementId;
+      let position = getRandomPosition();
+      let newSiblingOrder = 1;
+
+      if (parent) {
+        const parentIdParts = parent.id.split('-');
         const parentNeo4jId = parseInt(parentIdParts[parentIdParts.length - 1]);
-        const parentLabel = parentIdParts[0] === 'central' ? 'CentralTopic' : 'Topic';
+        const parentType = parentIdParts.slice(0, -1).join('-');
+        const parentLabel = parentType === 'central-topic' ? 'CentralTopic' : 'Topic';
 
-        query = `
-          MATCH (p:${parentLabel}) WHERE ID(p) = $parentNeo4jId
-          OPTIONAL MATCH (p)-[:HAS_TOPIC]->(existingChild:Topic)
-          WITH p, COUNT(existingChild) AS siblingCount
-          CREATE (newTopic:Topic {
-            name: $topicName,
-            siblingOrder: siblingCount + 1,
-            positionX: p.positionX + rand()*100 - 50,
-            positionY: p.positionY + 100 + rand()*50,
-            createdAt: datetime()
-          })
-          CREATE (p)-[r:HAS_TOPIC]->(newTopic)
-          RETURN ID(newTopic) AS newTopicId, newTopic.siblingOrder AS newSiblingOrder, newTopic.positionX AS posX, newTopic.positionY AS posY`;
-        params = { parentNeo4jId, topicName };
-      } else {
-        // Creating an orphan topic without sibling order
-        query = `
-          CREATE (newTopic:Topic {
-            name: $topicName,
-            positionX: $positionX,
-            positionY: $positionY,
-            createdAt: datetime()
-          })
-          RETURN ID(newTopic) AS newTopicId, null AS newSiblingOrder, newTopic.positionX AS posX, newTopic.positionY AS posY`;
-        params = {
-          topicName,
-          positionX: position.x,
-          positionY: position.y
-        };
+        const siblingOrderResult = await executeQuery(
+          `MATCH (p:${parentLabel})-[r:HAS_TOPIC]->(child:Topic) WHERE ID(p) = $parentId
+           RETURN MAX(child.siblingOrder) as maxOrder`,
+          { parentId: parentNeo4jId }
+        );
+        if (siblingOrderResult && siblingOrderResult.length > 0 && siblingOrderResult[0].get('maxOrder') !== null) {
+          newSiblingOrder = siblingOrderResult[0].get('maxOrder').toNumber() + 1;
+        }
+        
+        position = { x: parent.position.x + 200, y: parent.position.y + (newSiblingOrder * 50 - 100) };
+
+        const result = await executeQuery(
+          `MATCH (p:${parentLabel}) WHERE ID(p) = $parentId
+           CREATE (t:Topic {name: $name, positionX: $positionX, positionY: $positionY, siblingOrder: $siblingOrder, createdAt: datetime()})
+           CREATE (p)-[:HAS_TOPIC]->(t)
+           RETURN ID(t) as id, elementId(t) as elementId`,
+          { parentId: parentNeo4jId, name: topicName, positionX: position.x, positionY: position.y, siblingOrder: newSiblingOrder }
+        );
+        newTopicId = result[0].get('id').toNumber();
+        newTopicElementId = result[0].get('elementId');
+      } else { 
+        const result = await executeQuery(
+          'CREATE (t:Topic {name: $name, positionX: $positionX, positionY: $positionY, siblingOrder: $siblingOrder, createdAt: datetime()}) RETURN ID(t) as id, elementId(t) as elementId',
+          { name: topicName, positionX: position.x, positionY: position.y, siblingOrder: newSiblingOrder }
+        );
+        newTopicId = result[0].get('id').toNumber();
+        newTopicElementId = result[0].get('elementId');
       }
-
-      const result = await executeQuery(query, params);
-
-      if (!result || result.length === 0) {
-        throw new Error('Topic creation did not return expected result');
-      }
-
-      const newTopicRecord = result[0];
-      const newTopicId = newTopicRecord.get('newTopicId').toNumber();
-      const newSiblingOrder = newTopicRecord.get('newSiblingOrder')?.toNumber();
-      const newPosition = {
-        x: safeConvertNeoInt(newTopicRecord.get('posX'), position.x),
-        y: safeConvertNeoInt(newTopicRecord.get('posY'), position.y)
-      };
 
       const newNode = {
         id: `topic-${newTopicId}`,
         type: 'topicNode',
-        position: newPosition,
+        position,
         data: {
           label: topicName,
+          rawElementId: newTopicElementId,
           siblingOrder: newSiblingOrder,
-          onRename: async (newName) => {
-            try {
-              await executeQuery(
-                `MATCH (t:Topic) WHERE ID(t) = $topicId SET t.name = $newName`,
-                { topicId: newTopicId, newName }
-              );
-              setNodes(prev => prev.map(node =>
-                node.id === `topic-${newTopicId}`
-                  ? { ...node, data: { ...node.data, label: newName } }
-                  : node
-              ));
-            } catch (error) {
-              console.error('Error renaming topic:', error);
-              alert('Failed to rename topic');
-            }
-          }
+        },
+      };
+
+      setNodes((nds) => {
+        const newNodes = nds.concat(newNode);
+        if (parent) { 
+          const newEdge = {
+            id: `e-${parent.id}-topic-${newTopicId}`,
+            source: parent.id,
+            target: newNode.id,
+            type: 'floating',
+            label: 'HAS_TOPIC',
+            animated: true,
+            markerEnd: { type: MarkerType.ArrowClosed }
+          };
+          setEdges((eds) => addEdge(newEdge, eds));
+          return calculateDisplayNumbers(newNodes, addEdge(newEdge, edges)); 
         }
-      };
-
-      setNodes(prev => [...prev, newNode]);
-
-      // Only create edge and recalculate numbers for child topics
-     if (parentId) {
-       const newEdge = {
-         id: `e-${parentId}-${newNode.id}`,
-         source: parentId,
-         target: newNode.id,
-         type: 'floating'
-       };
-       
-       // Batch update edges and nodes together
-       const updatedEdges = [...edges, newEdge];
-       setEdges(updatedEdges);
-       setNodes(currentNodes => calculateDisplayNumbers(
-         currentNodes,
-         updatedEdges
-       ));
-     }
-
-     // Clear UI state
-     setNewTopicName('');
-     setShowTopicPopup(false);
-     setParentForNewTopic(null);
-
-   } catch (error) {
-     console.error('Error creating topic node:', error);
-     alert(`Failed to create topic node: ${error.message}`);
-   }
- };
-const handleCreateParagraphNode = async (parentId, statement) => {
-    if (!statement.trim()) {
-      alert('Paragraph statement is required.');
-      return;
+        return calculateDisplayNumbers(newNodes, edges);
+      });
+      
+      setShowTopicPopup(false);
+      setNewTopicName('');
+      setParentForNewTopic(null);
+    } catch (error) {
+      console.error('Error creating topic node:', error);
+      alert('Failed to create topic: ' + error.message);
     }
+  };
 
-    const position = getRandomPosition();
-    let newParagraphId;
-    let newSiblingOrder = null; // Will be set if parented
-
+  const handleCreateParagraphNode = async (parent, statement) => {
     try {
-      let query;
-      let params;
+      let newParagraphId;
+      let newParagraphElementId;
+      let position = getRandomPosition();
+      let newSiblingOrder = 1;
 
-      if (parentId) {
-        const parentIdParts = parentId.split('-');
+      if (parent) { 
+        const parentIdParts = parent.id.split('-');
         const parentNeo4jId = parseInt(parentIdParts[parentIdParts.length - 1]);
-        // Assuming parent can be Topic or CentralTopic, adjust if necessary
-        const parentLabel = parentIdParts[0] === 'central' ? 'CentralTopic' : 'Topic';
+        const parentLabel = 'Topic'; 
 
-        query = `
-          MATCH (p:\`${parentLabel}\`) WHERE ID(p) = $parentNeo4jId
-          OPTIONAL MATCH (p)-[:HAS_PARAGRAPH]->(existingChild:Paragraph)
-          WITH p, COUNT(existingChild) AS siblingCount
-          CREATE (newParagraph:Paragraph {
-            Statement: $statement,
-            siblingOrder: siblingCount + 1,
-            positionX: $positionX,
-            positionY: $positionY,
-            createdAt: timestamp()
-          })
-          CREATE (p)-[r:HAS_PARAGRAPH]->(newParagraph)
-          RETURN ID(newParagraph) AS newParagraphId, newParagraph.siblingOrder AS newSiblingOrder, newParagraph.positionX AS posX, newParagraph.positionY AS posY`;
-        params = { parentNeo4jId, statement, positionX: position.x, positionY: position.y };
-      } else {
-        // Create an orphan paragraph
-        query = `
-          CREATE (newParagraph:Paragraph {
-            Statement: $statement,
-            positionX: $positionX,
-            positionY: $positionY,
-            createdAt: timestamp()
-          })
-          RETURN ID(newParagraph) AS newParagraphId, null AS newSiblingOrder, newParagraph.positionX AS posX, newParagraph.positionY AS posY`;
-        params = { statement, positionX: position.x, positionY: position.y };
+        const siblingOrderResult = await executeQuery(
+          `MATCH (p:${parentLabel})-[r:HAS_PARAGRAPH]->(child:Paragraph) WHERE ID(p) = $parentId
+           RETURN MAX(child.siblingOrder) as maxOrder`,
+          { parentId: parentNeo4jId }
+        );
+        if (siblingOrderResult && siblingOrderResult.length > 0 && siblingOrderResult[0].get('maxOrder') !== null) {
+          newSiblingOrder = siblingOrderResult[0].get('maxOrder').toNumber() + 1;
+        }
+        
+        position = { x: parent.position.x + 250, y: parent.position.y + (newSiblingOrder * 40 - 80) };
+
+        const result = await executeQuery(
+          `MATCH (p:${parentLabel}) WHERE ID(p) = $parentId
+           CREATE (para:Paragraph {Statement: $statement, positionX: $positionX, positionY: $positionY, siblingOrder: $siblingOrder, createdAt: datetime()})
+           CREATE (p)-[:HAS_PARAGRAPH]->(para)
+           RETURN ID(para) as id, elementId(para) as elementId`,
+          { parentId: parentNeo4jId, statement: statement, positionX: position.x, positionY: position.y, siblingOrder: newSiblingOrder }
+        );
+        newParagraphId = result[0].get('id').toNumber();
+        newParagraphElementId = result[0].get('elementId');
+      } else { 
+         const result = await executeQuery(
+          'CREATE (para:Paragraph {Statement: $statement, positionX: $positionX, positionY: $positionY, siblingOrder: $siblingOrder, createdAt: datetime()}) RETURN ID(para) as id, elementId(para) as elementId',
+          { statement: statement, positionX: position.x, positionY: position.y, siblingOrder: newSiblingOrder }
+        );
+        newParagraphId = result[0].get('id').toNumber();
+        newParagraphElementId = result[0].get('elementId');
       }
-
-      const result = await executeQuery(query, params);
-
-      if (!result || result.length === 0) {
-        throw new Error('Paragraph creation did not return expected result');
-      }
-
-      const newRecord = result[0];
-      newParagraphId = newRecord.get('newParagraphId').toNumber();
-      newSiblingOrder = newRecord.get('newSiblingOrder')?.toNumber(); // Will be null for orphan
-      const newPosition = {
-        x: safeConvertNeoInt(newRecord.get('posX'), position.x),
-        y: safeConvertNeoInt(newRecord.get('posY'), position.y)
-      };
 
       const newNode = {
-        id: 'paragraph-' + newParagraphId,
+        id: `paragraph-${newParagraphId}`,
         type: 'paragraphNode',
-        position: newPosition,
+        position,
         data: {
-          label: statement, // Using label for the statement text
+          label: statement, 
+          rawElementId: newParagraphElementId,
           siblingOrder: newSiblingOrder,
-          onRename: async (newName) => {
+          onRename: async (newName) => { 
             try {
-              await executeQuery(
-                'MATCH (p:Paragraph) WHERE ID(p) = $paragraphId SET p.Statement = $newStatement',
-                { paragraphId: newParagraphId, newStatement: newName }
-              );
-              setNodes(prev => prev.map(node =>
-                node.id === 'paragraph-' + newParagraphId
-                  ? { ...node, data: { ...node.data, label: newName } }
-                  : node
-              ));
+              await executeQuery('MATCH (n:Paragraph) WHERE ID(n) = $id SET n.Statement = $newName', { id: newParagraphId, newName });
+              setNodes(nds => nds.map(n => n.id === `paragraph-${newParagraphId}` ? { ...n, data: { ...n.data, label: newName } } : n));
             } catch (renameError) {
               console.error('Error renaming paragraph:', renameError);
               alert('Failed to rename paragraph.');
             }
           }
-        }
+        },
       };
 
       setNodes(prev => [...prev, newNode]);
 
-      if (parentId) {
+      if (parent) {
         const newEdge = {
-          id: 'e-' + parentId + '-paragraph-' + newParagraphId,
-          source: parentId,
+          id: 'e-' + parent.id + '-paragraph-' + newParagraphId,
+          source: parent.id,
           target: newNode.id,
           type: 'floating', 
           label: 'HAS_PARAGRAPH', 
@@ -1021,11 +793,9 @@ const handleCreateParagraphNode = async (parentId, statement) => {
         setShowTopicPopup(true);
         break;
       case 'deleteNode':
-        // Optionally, add a confirm dialog here if desired
-        // if (confirm(`Delete ${contextNodeForMenu.type} "${contextNodeForMenu.data.label}"?`)) {
         handleDeleteNode(contextNodeForMenu);
-        // }
         break;
+      // 'exportRtf' case removed
       default:
         console.warn('Unknown node context menu action:', action);
     }
@@ -1033,7 +803,6 @@ const handleCreateParagraphNode = async (parentId, statement) => {
     setContextNodeForMenu(null);
   }, [contextNodeForMenu, setParentForNewParagraph, setShowParagraphPopup, setParentForNewTopic, setShowTopicPopup, handleDeleteNode, setShowNodeContextMenu, setContextNodeForMenu]);
 
-  // Initialize Neo4j connection
   useEffect(() => {
     const initAndLoadData = async () => {
       try {
@@ -1044,22 +813,22 @@ const handleCreateParagraphNode = async (parentId, statement) => {
         console.log('Loading central topics...');
         setDbStatus('connected');
         
-        // Load all central topics and their connections
         const centralTopicsQuery =
           'MATCH (ct:CentralTopic) ' +
           'OPTIONAL MATCH (ct)-[r:HAS_TOPIC|HAS_REFERENCE|HAS_PARAGRAPH]-(other) ' +
           'RETURN ' +
-          '  ID(ct) as topicId, ' +
+          '  ID(ct) as topicId, elementId(ct) as elementId, ' + 
           '  ct.name as name, ' +
           '  toFloat(ct.positionX) as positionX, ' +
           '  toFloat(ct.positionY) as positionY, ' +
           '  COLLECT(DISTINCT { ' +
-          '    otherId: ID(other), ' +
+          '    otherId: ID(other), elementIdOther: elementId(other), ' + 
           '    otherType: CASE ' +
           "      WHEN other:Topic THEN 'topic' " +
           "      WHEN other:Paper THEN 'paper' " +
           "      WHEN other:CentralTopic THEN 'central-topic' " +
           "      WHEN other:Paragraph THEN 'paragraph' " +
+          "      WHEN other:ReferencedText THEN 'referenceNode' " + 
           '    END, ' +
           '    isOutgoing: startNode(r) = ct ' +
           '  }) as connections';
@@ -1069,495 +838,343 @@ const handleCreateParagraphNode = async (parentId, statement) => {
           const defaultPos = getRandomPosition();
           const position = safeGetPosition(topic, defaultPos);
           const idValue = safeConvertNeoInt(topic.get('topicId'));
+          const elementId = topic.get('elementId'); 
+
           return {
-            id: 'central-topic-' + idValue,
+            id: `central-topic-${idValue}`,
             type: 'centralTopicNode',
             position,
             data: {
-              label: topic.get('name') || '',
+              label: topic.get('name'),
+              rawElementId: elementId || idValue.toString(), 
               onRename: async (newName) => {
-                const nodeId = idValue; // Capture the ID in closure
-                try {
-                  await executeQuery(
-                    'MATCH (ct:CentralTopic) WHERE ID(ct) = $topicId SET ct.name = $newName',
-                    { topicId: nodeId, newName }
-                  );
-                  setNodes(prev =>
-                    prev.map(node =>
-                      node.id === 'central-topic-' + nodeId
-                        ? { ...node, data: { ...node.data, label: newName } }
-                        : node
-                    )
-                  );
-                } catch (error) {
-                  console.error('Error renaming central topic:', error);
-                  alert('Failed to rename central topic');
-                }
+                await executeQuery('MATCH (n) WHERE ID(n) = $id SET n.name = $newName', { id: idValue, newName });
+                setNodes(nds => nds.map(n => n.id === `central-topic-${idValue}` ? { ...n, data: { ...n.data, label: newName } } : n));
               }
-            }
+            },
           };
         });
-        
-        console.log('Central topics loaded:', centralTopicNodes);
 
-        console.log('Loading papers...');
-        // Load all papers and their references
-        const papersQuery =
-          'MATCH (p:Paper) ' +
-          'RETURN ' +
-          '  ID(p) as paperId, ' +
-          '  p.title as title, ' +
-          '  toFloat(p.positionX) as positionX, ' +
-          '  toFloat(p.positionY) as positionY, ' +
-          '  p.importance as importance, ' +
-          '  p.notes as notes';
-        const papers = await executeQuery(papersQuery);
-        
-        // Load papers with their positions
+        const paperQuery = 'MATCH (p:Paper) RETURN ID(p) as id, p.title as title, p.author as author, p.importance as importance, p.notes as notes, toFloat(p.positionX) as positionX, toFloat(p.positionY) as positionY, elementId(p) as elementId';
+        const papers = await executeQuery(paperQuery);
         const paperNodes = papers.map(paper => {
           const defaultPos = getRandomPosition();
           const position = safeGetPosition(paper, defaultPos);
-          const importance = paper.get('importance');
-          // Handle importance value which might be a number or Neo4j Integer
-          const importanceValue = importance ?
-            (typeof importance.toNumber === 'function' ? importance.toNumber() : Number(importance)) : 0;
-          
-          const idValue = safeConvertNeoInt(paper.get('paperId'));
-
+          const idValue = safeConvertNeoInt(paper.get('id'));
+          const elementId = paper.get('elementId');
           return {
-            id: 'paper-' + idValue,
+            id: `paper-${idValue}`,
             type: 'paperNode',
-            position: position,
+            position,
             data: {
-              label: paper.get('title'),
-              importance: importanceValue,
-              notes: paper.get('notes') || ''
-            }
+              label: paper.get('title') || 'Untitled Paper',
+              author: paper.get('author') || 'Unknown Author',
+              importance: safeConvertNeoInt(paper.get('importance'), 0),
+              notes: paper.get('notes') || '',
+              rawElementId: elementId || idValue.toString(),
+            },
           };
         });
 
-      console.log('Papers loaded:', paperNodes);
-      console.log('Loading topics...');
-
-        // Load all topics and their connections
-        const topicsQuery =
-          'MATCH (t:Topic) ' +
-          'OPTIONAL MATCH (t)-[r:HAS_TOPIC|HAS_REFERENCE|HAS_PARAGRAPH]-(other) ' +
-          'RETURN ' +
-          '  ID(t) as topicId, ' +
-          '  t.name as name, ' +
-          '  t.siblingOrder as siblingOrder, ' +
-          '  toFloat(t.positionX) as positionX, ' +
-          '  toFloat(t.positionY) as positionY, ' +
-          '  COLLECT(DISTINCT { ' +
-          '    otherId: ID(other), ' +
-          '    otherType: CASE ' +
-          "      WHEN other:Topic THEN 'topic' " +
-          "      WHEN other:Paper THEN 'paper' " +
-          "      WHEN other:CentralTopic THEN 'central-topic' " +
-          "      WHEN other:Paragraph THEN 'paragraph' " +
-          '    END, ' +
-          '    isOutgoing: startNode(r) = t ' +
-          '  }) as connections';
-        const topics = await executeQuery(topicsQuery);
-
+        const topicQuery = 'MATCH (t:Topic) RETURN ID(t) as id, t.name as name, toFloat(t.positionX) as positionX, toFloat(t.positionY) as positionY, t.siblingOrder as siblingOrder, elementId(t) as elementId, t.createdAt as createdAt';
+        const topics = await executeQuery(topicQuery);
         const topicNodes = topics.map(topic => {
           const defaultPos = getRandomPosition();
           const position = safeGetPosition(topic, defaultPos);
+          const idValue = safeConvertNeoInt(topic.get('id'));
+          const elementId = topic.get('elementId');
           return {
-            id: 'topic-' + safeConvertNeoInt(topic.get('topicId')),
+            id: `topic-${idValue}`,
             type: 'topicNode',
-            position: position,
+            position,
             data: {
-              label: topic.get('name') || '',
-              siblingOrder: safeConvertNeoInt(topic.get('siblingOrder'), 1)
-            }
+              label: topic.get('name') || 'Untitled Topic',
+              rawElementId: elementId || idValue.toString(),
+              siblingOrder: safeConvertNeoInt(topic.get('siblingOrder'), null), 
+              createdAt: topic.get('createdAt')?.toString()
+            },
           };
         });
-
-      console.log('Topics loaded:', topicNodes);
-
-      console.log('Loading paragraphs...');
-      const paragraphsQuery =
-        'MATCH (p:Paragraph) ' +
-        'OPTIONAL MATCH (p)-[r_cites:CITES]->(ref:ReferencedText) ' +
-        'RETURN ' +
-        '  ID(p) as paragraphId, p.Statement as statement, p.siblingOrder as siblingOrder, ' +
-        '  toFloat(p.positionX) as positionX, toFloat(p.positionY) as positionY, ' +
-        '  COLLECT(DISTINCT CASE ' +
-        '    WHEN r_cites IS NOT NULL THEN { ' +
-        '      otherId: ID(ref), ' +
-        "      otherType: 'referenceNode', " +
-        "      relationshipType: type(r_cites), " +
-        '      isOutgoing: true ' +
-        '    } ' +
-        '    ELSE null ' +
-        '  END) as connections';
-      const paragraphs = await executeQuery(paragraphsQuery);
-
-      const paragraphNodes = paragraphs.map(para => {
-        const defaultPos = getRandomPosition();
-        const position = safeGetPosition(para, defaultPos);
-        return {
-          id: 'paragraph-' + safeConvertNeoInt(para.get('paragraphId')),
-          type: 'paragraphNode',
-          position: position,
-          data: {
-            label: para.get('statement') || '',
-            siblingOrder: safeConvertNeoInt(para.get('siblingOrder'), null),
-            // connections will be processed separately to create edges
-            connections: para.get('connections') // Store connections for edge creation
-          }
-        };
-      });
-      console.log('Paragraphs loaded:', paragraphNodes);
-
-      const paragraphCiteEdges = [];
-      paragraphs.forEach(para => {
-        const paragraphNeo4jId = safeConvertNeoInt(para.get('paragraphId'));
-        const connections = para.get('connections');
-        if (connections && Array.isArray(connections)) {
-          connections.forEach(conn => {
-            if (conn && conn.otherId && conn.otherType && conn.relationshipType === 'CITES') {
-              const sourceNodeId = `paragraph-${paragraphNeo4jId}`;
-              const targetNodeId = `${conn.otherType}-${safeConvertNeoInt(conn.otherId)}`; // Should be 'referenceNode-ID'
-              paragraphCiteEdges.push({
-                id: `edge-${sourceNodeId}-${targetNodeId}-${conn.relationshipType}-${Date.now()}-${Math.random()}`,
-                source: sourceNodeId,
-                target: targetNodeId,
-                type: 'simpleFloatingEdge', // As per plan
-                animated: true,
-                label: conn.relationshipType, // 'CITES'
-                markerEnd: { type: MarkerType.ArrowClosed }
-              });
-            }
-          });
-        }
-      });
-      console.log('Paragraph CITES edges created:', paragraphCiteEdges);
-
-      console.log('Loading references...');
-
-        // Load all connections
-        const centralConnectionsQuery =
-          "MATCH (ct:CentralTopic)-[r]-(n) " +
-          "WHERE type(r) IN ['HAS_TOPIC', 'HAS_REFERENCE', 'HAS_PARAGRAPH'] " +
-          "RETURN " +
-          "  ID(ct) as ctId, " +
-          "  ID(n) as otherId, " +
-          "  type(r) as relationType, " +
-          "  startNode(r) = ct as isOutgoing, " +
-          "  labels(n) as nodeLabels, " +
-          "  CASE " +
-          "    WHEN n:Paper THEN 'paper' " +
-          "    WHEN n:Topic THEN 'topic' " +
-          "    WHEN n:CentralTopic THEN 'central-topic' " +
-          "    WHEN n:ReferencedText THEN 'ref' " +
-          "    WHEN n:Paragraph THEN 'paragraph' " +
-          "  END as otherType";
-        const centralConnections = await executeQuery(centralConnectionsQuery);
-
-        const centralEdges = centralConnections.map(conn => {
-          const ctId = conn.get('ctId').toNumber();
-          const otherId = conn.get('otherId').toNumber();
-          const otherType = conn.get('otherType');
-          const isOutgoing = conn.get('isOutgoing');
-          const relationType = conn.get('relationType');
-          
-          let source = isOutgoing ? 'central-topic-' + ctId : otherType + '-' + otherId;
-          let target = isOutgoing ? otherType + '-' + otherId : 'central-topic-' + ctId;
-
-          // Log edge creation for debugging
-          console.log('Creating edge:', { source, target, relationType, isOutgoing });
-          
+        
+        const paragraphQuery = 'MATCH (p:Paragraph) RETURN ID(p) as id, p.Statement as statement, toFloat(p.positionX) as positionX, toFloat(p.positionY) as positionY, p.siblingOrder as siblingOrder, elementId(p) as elementId, p.createdAt as createdAt';
+        const paragraphs = await executeQuery(paragraphQuery);
+        const paragraphNodes = paragraphs.map(para => {
+          const defaultPos = getRandomPosition();
+          const position = safeGetPosition(para, defaultPos);
+          const idValue = safeConvertNeoInt(para.get('id'));
+          const elementId = para.get('elementId');
           return {
-            id: 'edge-' + source + '-' + target + '-' + relationType + '-' + Date.now() + '-' + Math.random(), // Added relationType for uniqueness
-            source,
-            target,
-            type: 'floating', // Consistent with other custom edges
-            label: relationType, // Use the actual relationship type as label
-            animated: true,
-            markerEnd: { type: MarkerType.ArrowClosed } // Consistent marker
+            id: `paragraph-${idValue}`,
+            type: 'paragraphNode',
+            position,
+            data: {
+              label: para.get('statement') || 'Empty Paragraph',
+              rawElementId: elementId || idValue.toString(),
+              siblingOrder: safeConvertNeoInt(para.get('siblingOrder'), null),
+              createdAt: para.get('createdAt')?.toString(),
+               onRename: async (newName) => {
+                await executeQuery('MATCH (n:Paragraph) WHERE ID(n) = $id SET n.Statement = $newName', { id: idValue, newName });
+                setNodes(nds => nds.map(n => n.id === `paragraph-${idValue}` ? { ...n, data: { ...n.data, label: newName } } : n));
+              }
+            },
           };
         });
 
-        // Load remaining references and their connections
-        const referencesQuery =
-          "MATCH (source)-[rel:HAS_REFERENCE]->(r:ReferencedText) " +
-          "WHERE source:Paper OR source:Topic " +
-          "RETURN " +
-          "  CASE WHEN source:Paper THEN 'paper' ELSE 'topic' END as sourceType, " +
-          "  ID(source) as sourceId, " +
-          "  ID(r) as refId, " +
-          "  r.text as text, " +
-          "  toFloat(r.positionX) as positionX, " +
-          "  toFloat(r.positionY) as positionY";
-        const references = await executeQuery(referencesQuery);
-
+        const referenceQuery = 'MATCH (r:ReferencedText) RETURN ID(r) as id, r.text as text, toFloat(r.positionX) as positionX, toFloat(r.positionY) as positionY, elementId(r) as elementId';
+        const references = await executeQuery(referenceQuery);
         const referenceNodes = references.map(ref => {
-          const position = {
-            x: typeof ref.get('positionX') === 'number' ? ref.get('positionX') : getRandomPosition().x,
-            y: typeof ref.get('positionY') === 'number' ? ref.get('positionY') : getRandomPosition().y
-          };
+          const defaultPos = getRandomPosition();
+          const position = safeGetPosition(ref, defaultPos);
+          const idValue = safeConvertNeoInt(ref.get('id'));
+          const elementId = ref.get('elementId');
+          const fullText = ref.get('text') || 'No text';
           return {
-            id: 'referenceNode-' + safeConvertNeoInt(ref.get('refId')), // Changed ID format
+            id: `referenceNode-${idValue}`,
             type: 'referenceNode',
-            position: position,
+            position,
             data: {
-              label: ref.get('text').substring(0, 30) + (ref.get('text').length > 30 ? '...' : ''),
-              fullText: ref.get('text')
-            }
+              label: fullText.substring(0, 30) + (fullText.length > 30 ? '...' : ''),
+              fullText: fullText,
+              rawElementId: elementId || idValue.toString(),
+            },
           };
         });
-      console.log('References loaded:', referenceNodes);
+        
+        const paragraphCiteQuery = `
+          MATCH (para:Paragraph)-[r:CITES]->(ref:ReferencedText)
+          RETURN ID(para) AS sourceId, ID(ref) AS targetId, type(r) as label
+        `;
+        const paragraphCiteResults = await executeQuery(paragraphCiteQuery);
+        const paragraphCiteEdges = paragraphCiteResults.map(edge => ({
+          id: `e-paragraph-${safeConvertNeoInt(edge.get('sourceId'))}-referenceNode-${safeConvertNeoInt(edge.get('targetId'))}-CITES`,
+          source: `paragraph-${safeConvertNeoInt(edge.get('sourceId'))}`,
+          target: `referenceNode-${safeConvertNeoInt(edge.get('targetId'))}`,
+          type: 'simpleFloatingEdge', 
+          label: edge.get('label'),
+          animated: false,
+          markerEnd: { type: MarkerType.ArrowClosed, width: 20, height: 20, color: '#FF0072' },
+          style: { stroke: '#FF0072', strokeWidth: 1.5 },
+        }));
 
-        const referenceEdges = references.map(ref => {
-          const sourceType = ref.get('sourceType');
-          const sourceId = safeConvertNeoInt(ref.get('sourceId'));
-          const refId = safeConvertNeoInt(ref.get('refId'));
+        const relationshipQuery = `
+          MATCH (source)-[r]->(target)
+          WHERE NOT type(r) = 'CITES' 
+          RETURN 
+            ID(source) AS sourceId, 
+            labels(source)[0] AS sourceType, 
+            elementId(source) AS sourceElementId, 
+            ID(target) AS targetId, 
+            labels(target)[0] AS targetType, 
+            elementId(target) AS targetElementId, 
+            type(r) AS label
+        `;
+        const relationships = await executeQuery(relationshipQuery);
+        const loadedEdges = relationships.map(rel => {
+          const sourceId = safeConvertNeoInt(rel.get('sourceId'));
+          const targetId = safeConvertNeoInt(rel.get('targetId'));
+          let sourceType = rel.get('sourceType')?.toLowerCase().replace('_', '-');
+          if (sourceType === 'referencedtext') sourceType = 'referenceNode';
+          if (sourceType === 'centraltopic') sourceType = 'central-topic'; // Ensure 'central-topic' matches node ID format
+          
+          let targetType = rel.get('targetType')?.toLowerCase().replace('_', '-');
+          if (targetType === 'referencedtext') targetType = 'referenceNode';
+          if (targetType === 'centraltopic') targetType = 'central-topic'; // Ensure 'central-topic' matches node ID format
+          
+          const label = rel.get('label');
+
+          const sourceReactFlowId = `${sourceType}-${sourceId}`;
+          const targetReactFlowId = `${targetType}-${targetId}`;
+
+          console.log('[initAndLoadData] Edge Processing:', {
+            originalSourceType: rel.get('sourceType'),
+            originalTargetType: rel.get('targetType'),
+            processedSourceType: sourceType,
+            processedTargetType: targetType,
+            sourceReactFlowId,
+            targetReactFlowId,
+            label
+          });
+
           return {
-            id: 'edge-' + sourceType + '-' + sourceId + '-referenceNode-' + refId + '-' + Date.now() + '-' + Math.random(), // Changed target part of ID
-            source: sourceType + '-' + sourceId,
-            target: 'referenceNode-' + refId, // Changed target ID format
-            type: 'floating', // Consistent
-            label: 'HAS_REFERENCE', // Explicit label
+            id: `edge-${sourceReactFlowId}-${targetReactFlowId}-${label}-${Date.now()}-${Math.random()}`, 
+            source: sourceReactFlowId,
+            target: targetReactFlowId,
+            type: 'floating',
+            label: label,
             animated: true,
-            markerEnd: { type: MarkerType.ArrowClosed }
+            markerEnd: { type: MarkerType.ArrowClosed },
           };
-        });
+        }).filter(edge => edge.source && edge.target && edge.label); 
 
-        // Create edges from topic and central topic connections
-        const topicConnections = [];
-        
-        // Process central topic connections
-        centralTopics.forEach(ct => {
-          const connections = ct.get('connections');
-          connections.forEach(conn => {
-            if (conn.otherId && conn.otherType) {
-              const sourceId = conn.isOutgoing ?
-                'central-topic-' + ct.get('topicId').toNumber() :
-                conn.otherType + '-' + conn.otherId.toNumber();
-              const targetId = conn.isOutgoing ?
-                conn.otherType + '-' + conn.otherId.toNumber() :
-                'central-topic-' + ct.get('topicId').toNumber();
-              topicConnections.push({
-                id: 'edge-' + sourceId + '-' + targetId + '-' + conn.relationType + '-' + Date.now() + '-' + Math.random(),
-                source: sourceId,
-                target: targetId,
-                type: 'floating',
-                label: conn.relationType, // Use the actual relationship type
-                animated: true,
-                markerEnd: { type: MarkerType.ArrowClosed }
-              });
-            }
-          });
-        });
 
-        // Process topic connections
-        topics.forEach(topic => {
-          const connections = topic.get('connections');
-          connections.forEach(conn => {
-            if (conn.otherId && conn.otherType) {
-              const sourceId = conn.isOutgoing ?
-                'topic-' + topic.get('topicId').toNumber() :
-                conn.otherType + '-' + conn.otherId.toNumber();
-              const targetId = conn.isOutgoing ?
-                conn.otherType + '-' + conn.otherId.toNumber() :
-                'topic-' + topic.get('topicId').toNumber();
-              topicConnections.push({
-                id: 'edge-' + sourceId + '-' + targetId + '-' + conn.relationType + '-' + Date.now() + '-' + Math.random(),
-                source: sourceId,
-                target: targetId,
-                type: 'floating',
-                label: conn.relationType, // Use the actual relationship type
-                animated: true,
-                markerEnd: { type: MarkerType.ArrowClosed }
-              });
-            }
-          });
-        });
-
-        // Add selection and type-specific styling to nodes
         const baseNodes = [
-          ...paperNodes,
-          ...topicNodes,
-          ...paragraphNodes,
-          ...(referenceNodes || []),
-          ...centralTopicNodes
+          ...centralTopicNodes, ...paperNodes, ...topicNodes, ...referenceNodes, ...paragraphNodes
         ];
-
-        console.log('All nodes loaded, combining:', {
-          paperNodes: paperNodes.length,
-          topicNodes: topicNodes.length,
-          referenceNodes: referenceNodes?.length || 0,
-          centralTopicNodes: centralTopicNodes.length
+        
+        console.log('All nodes loaded, combining:', { 
+          centralTopicNodes, paperNodes, topicNodes, referenceNodes, paragraphNodes 
         });
 
-        // Construct all edges first
         const allEdges = [
-          ...(centralEdges || []),
-          ...(topicConnections || []),
-          ...(referenceEdges || []),
-          ...(paragraphCiteEdges || []) // Added paragraph CITES edges
-        ].filter(edge => edge && edge.source && edge.target);
+          ...loadedEdges, ...paragraphCiteEdges 
+        ].filter((edge, index, self) => 
+            index === self.findIndex((e) => (
+                e.source === edge.source && e.target === edge.target && e.label === edge.label
+            ))
+        );
         
-        console.log('Setting edges:', allEdges);
+        const nodesWithDisplayNumbers = calculateDisplayNumbers(baseNodes, allEdges.filter(e => e.label === 'HAS_TOPIC' || e.label === 'HAS_PARAGRAPH'));
+        
+        setNodes(nodesWithDisplayNumbers.map(node => ({
+          ...node,
+          style: node.type === 'paperNode' ? paperNodeStyle :
+                 node.type === 'topicNode' ? topicNodeStyle :
+                 node.type === 'referenceNode' ? referenceNodeStyle :
+                 node.type === 'centralTopicNode' ? centralTopicNodeStyle :
+                 node.type === 'paragraphNode' ? paragraphNodeStyle :
+                 commonNodeStyle
+        })));
         setEdges(allEdges);
-
-        // Calculate display numbers using the freshly constructed baseNodes and allEdges
-        const nodesWithDisplayNumbers = calculateDisplayNumbers(baseNodes, allEdges);
-        setNodes(nodesWithDisplayNumbers);
+        console.log('Data loaded and processed.');
 
       } catch (error) {
-        console.error('Failed to connect to Neo4j:', error);
+        console.error('Failed to initialize and load data:', error);
         setDbStatus('error');
       }
     };
-  
     initAndLoadData();
     return () => {
       closeDriver();
     };
-  }, []); // Only run on initial mount
+  }, []);
 
-  // Apply styles to nodes
-  const getNodeStyle = useCallback((nodeType) => {
-    switch (nodeType) {
-      case 'paperNode':
-        return paperNodeStyle;
-      case 'topicNode':
-        return topicNodeStyle;
-      case 'referenceNode':
-        return referenceNodeStyle;
-      case 'centralTopicNode':
-        return centralTopicNodeStyle;
-      default:
-        return commonNodeStyle;
+  const onSelectionChange = useCallback((elements) => {
+    if (elements && elements.nodes && elements.nodes.length > 0) {
+      setSelectedNode(elements.nodes[0]);
+      setNodes((prevNodes) =>
+        prevNodes.map((node) => ({
+          ...node,
+          style: node.id === elements.nodes[0].id
+            ? selectedNodeStyle
+            : node.type === 'paperNode'
+              ? paperNodeStyle
+              : node.type === 'topicNode'
+                ? topicNodeStyle
+                : node.type === 'referenceNode'
+                  ? referenceNodeStyle
+                  : node.type === 'centralTopicNode'
+                    ? centralTopicNodeStyle
+                    : node.type === 'paragraphNode'
+                      ? paragraphNodeStyle
+                      : commonNodeStyle
+        }))
+      );
+    } else {
+      setSelectedNode(null);
+      setNodes((prevNodes) =>
+        prevNodes.map((node) => ({
+          ...node,
+          style: node.type === 'paperNode' ? paperNodeStyle :
+                 node.type === 'topicNode' ? topicNodeStyle :
+                 node.type === 'referenceNode' ? referenceNodeStyle :
+                 node.type === 'centralTopicNode' ? centralTopicNodeStyle :
+                 node.type === 'paragraphNode' ? paragraphNodeStyle :
+                 commonNodeStyle
+        }))
+      );
     }
   }, []);
 
-  useEffect(() => {
-    if (!nodes) return;
-    console.log('Applying styles to nodes:', nodes);
-    
-    const nodesWithStyle = nodes.map(node => {
-      // Skip if node already has style
-      if (node.style) return node;
+  const handleFileUpload = async (event) => {
+    const file = event.target.files[0];
+    if (file && file.type === 'application/pdf') {
+      const arrayBuffer = await file.arrayBuffer();
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+      const pdf = await loadingTask.promise;
       
-      return {
-        ...node,
-        style: getNodeStyle(node.type)
-      };
-    });
-
-    // Only update if styles have changed
-    const hasStyleChanges = nodesWithStyle.some(
-      (node, index) => !nodes[index]?.style ||
-        JSON.stringify(nodes[index].style) !== JSON.stringify(node.style)
-    );
-
-    if (hasStyleChanges) {
-      console.log('Updating node styles');
-      setNodes(nodesWithStyle);
-    }
-  }, [nodes, getNodeStyle]); // Update styles when nodes change or style getter changes
-
-// Recalculate display numbers whenever nodes or edges change
-  useEffect(() => {
-    // console.log("Nodes or edges changed, considering recalculating display numbers...");
-    
-    // Only proceed if there are nodes to process.
-    if (nodes.length === 0) {
-      // console.log("No nodes to process for display numbers, skipping recalculation.");
-      return;
-    }
-
-    const newCalculatedNodes = calculateDisplayNumbers(nodes, edges);
-
-    let displayNumbersActuallyChanged = false;
-    if (newCalculatedNodes.length !== nodes.length) {
-      // This would indicate a structural change not just a data update, should update.
-      displayNumbersActuallyChanged = true;
-      // console.warn("Node list length changed during display number calculation. This is unexpected.");
-    } else {
-      for (let i = 0; i < nodes.length; i++) {
-        // Assuming newCalculatedNodes[i] corresponds to nodes[i] in terms of ID and order,
-        // which is true because calculateDisplayNumbers uses nodes.map() then Array.from(map.values()).
-        if (nodes[i].data.displayNumber !== newCalculatedNodes[i].data.displayNumber) {
-          displayNumbersActuallyChanged = true;
-          break;
-        }
+      const numPages = pdf.numPages;
+      const pagesContent = [];
+      for (let i = 1; i <= numPages; i++) {
+        const page = await pdf.getPage(i);
+        const pageData = await processPdfPage(page, i);
+        pagesContent.push(pageData);
       }
-    }
+      setPdfContent({ pages: pagesContent, title: file.name });
 
-    if (displayNumbersActuallyChanged) {
-      // console.log("Display numbers actually changed, updating nodes state.");
-      // Pass the already computed newCalculatedNodes.
-      // We are using `nodes` from the effect's closure, which is the current state for this render.
-      setNodes(newCalculatedNodes);
+      try {
+        const result = await executeQuery(
+          'CREATE (p:Paper {title: $title, author: $author, uploadedAt: datetime(), positionX: $positionX, positionY: $positionY, localPath: $localPath}) RETURN ID(p) as id, elementId(p) as elementId',
+          {
+            title: file.name,
+            author: 'Unknown', 
+            positionX: getRandomPosition().x,
+            positionY: getRandomPosition().y,
+            localPath: URL.createObjectURL(file) 
+          }
+        );
+        const newPaperId = result[0].get('id').toNumber();
+        const newPaperElementId = result[0].get('elementId');
+        const paperNode = {
+          id: `paper-${newPaperId}`,
+          type: 'paperNode',
+          position: getRandomPosition(),
+          data: {
+            label: file.name,
+            author: 'Unknown',
+            rawElementId: newPaperElementId,
+            localPath: URL.createObjectURL(file)
+          },
+          style: paperNodeStyle,
+        };
+        setNodes(nds => [...nds, paperNode]);
+        setCurrentPaperId(newPaperId); 
+        // setCurrentPaperTitle(file.name); // This was the unused state setter
+      } catch (error) {
+        console.error('Error creating Paper node in Neo4j:', error);
+      }
     } else {
-      // console.log("Display numbers did not change, skipping nodes state update to prevent loop.");
+      alert('Please select a PDF file.');
     }
-  }, [nodes, edges]); // Dependency array includes nodes and edges
-  // Handle node selection changes
-  const onSelectionChange = useCallback(({ nodes }) => {
-    setSelectedNode(nodes?.[0] || null);
-  }, []);
+  };
 
-  // Handle keyboard events for node deletion
   useEffect(() => {
-    const handleKeyDown = async (event) => {
-      if (selectedNode && (event.key === 'Delete' || event.key === 'Backspace')) {
-        event.preventDefault();
-
-        try {
-          // Delete node from Neo4j based on type
-          const nodeId = selectedNode.id.split('-')[1];
-          
-          await executeQuery(
-            `
-            MATCH (n)
-            WHERE ID(n) = $nodeId
-            DETACH DELETE n
-            `,
-            { nodeId: parseInt(nodeId) }
-          );
-
-          // Remove node and its connected edges from state
-          setNodes(nodes => nodes.filter(node => node.id !== selectedNode.id));
-          setEdges(edges => edges.filter(edge =>
-            edge.source !== selectedNode.id && edge.target !== selectedNode.id
-          ));
-          
-          setSelectedNode(null);
-        } catch (error) {
-          console.error('Error deleting node:', error);
-          alert('Failed to delete node');
-        }
+    const handleGlobalMouseUp = () => {
+      if (leftWorkspaceRef.current) {
+        leftWorkspaceRef.current.removeEventListener('mousemove', handleTextSelection);
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNode]);
+    if (leftWorkspaceRef.current) {
+      leftWorkspaceRef.current.addEventListener('mouseup', handleTextSelection);
+      document.addEventListener('mouseup', handleGlobalMouseUp);
+    }
 
-  const [isLoading, setIsLoading] = useState(false);
-  const [showContextMenu, setShowContextMenu] = useState(false);
-  const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
-  const [selectedText, setSelectedText] = useState('');
+    return () => {
+      if (leftWorkspaceRef.current) {
+        leftWorkspaceRef.current.removeEventListener('mouseup', handleTextSelection);
+      }
+      document.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+  }, [pdfContent]); 
 
-  // Refs
-  const dragRef = useRef(null);
-  const leftWorkspaceRef = useRef(null);
-  
-  // Handle workspace resizing
+  useEffect(() => {
+    const handleKeyDown = async (event) => {
+      if (event.key === 'Delete' && selectedNode) {
+        await handleDeleteNode(selectedNode);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [selectedNode, handleDeleteNode]); 
+
   useEffect(() => {
     const handleMouseMove = (e) => {
-      if (!isDragging || !dragRef.current) return;
-      const delta = e.clientX - dragRef.current.startX;
-      const containerWidth = document.querySelector('.flex-1.flex.mt-16').offsetWidth;
-      const newWidth = dragRef.current.startWidth + (delta / containerWidth * 100);
-      setLeftWidth(clamp(newWidth, 30, 70)); // Limit width between 30% and 70%
+      if (!dragRef.current) return;
+      const dx = e.clientX - dragRef.current.startX;
+      const newLeftPercent = ((dragRef.current.startWidthPx + dx) / window.innerWidth) * 100;
+      setLeftWidth(clamp(newLeftPercent, 20, 80)); 
     };
 
     const handleMouseUp = () => {
@@ -1589,7 +1206,6 @@ const handleCreateParagraphNode = async (parentId, statement) => {
       const rect = range.getBoundingClientRect();
       const workspaceRect = leftWorkspaceRef.current.getBoundingClientRect();
       
-      // Only show context menu if selection is within left workspace
       if (rect.left >= workspaceRect.left && rect.right <= workspaceRect.right) {
         setSelectedText(text);
         setContextMenuPosition({
@@ -1612,7 +1228,6 @@ const handleCreateParagraphNode = async (parentId, statement) => {
 
     try {
       if (action === 'mark') {
-        // Create TextMark node and relate it to the current Paper
         await executeQuery(
           `
           MATCH (p:Paper)
@@ -1632,7 +1247,6 @@ const handleCreateParagraphNode = async (parentId, statement) => {
         );
         console.log('Marked text saved and linked to paper:', selectedText);
       } else if (action === 'reference') {
-        // Create ReferencedText node and relate it to the current Paper
         const result = await executeQuery(
           `
           MATCH (p:Paper)
@@ -1644,7 +1258,7 @@ const handleCreateParagraphNode = async (parentId, statement) => {
             positionY: $positionY
           })
           CREATE (p)-[rel:HAS_REFERENCE]->(r)
-          RETURN ID(r) as refId
+          RETURN ID(r) as refId, elementId(r) as elementId
           `,
           {
             paperId: currentPaperId,
@@ -1655,27 +1269,30 @@ const handleCreateParagraphNode = async (parentId, statement) => {
         );
         
         const refId = result[0].get('refId').toNumber();
+        const refElementId = result[0].get('elementId');
         const newRefNode = {
-          id: `ref-${refId}`,
+          id: `referenceNode-${refId}`, 
           type: 'referenceNode',
           position: getRandomPosition(),
           data: {
             label: selectedText.substring(0, 30) + (selectedText.length > 30 ? '...' : ''),
-            fullText: selectedText
+            fullText: selectedText,
+            rawElementId: refElementId
           }
         };
         
-        // Add new node and edge to the graph
         const newEdge = {
-          id: `edge-paper-${currentPaperId}-ref-${refId}-${Date.now()}-${Math.random()}`,
+          id: `edge-paper-${currentPaperId}-referenceNode-${refId}-${Date.now()}-${Math.random()}`,
           source: `paper-${currentPaperId}`,
-          target: `ref-${refId}`,
-          type: 'default',
-          animated: true
+          target: `referenceNode-${refId}`,
+          type: 'floating', 
+          label: 'HAS_REFERENCE', 
+          animated: true,
+          markerEnd: { type: MarkerType.ArrowClosed }
         };
         
         setNodes(prevNodes => [...prevNodes, newRefNode]);
-        setEdges(prevEdges => [...prevEdges, newEdge]);
+        setEdges(prevEdges => addEdge(newEdge, prevEdges)); 
         
         console.log('Reference created and added to graph:', refId);
       }
@@ -1692,9 +1309,7 @@ const handleCreateParagraphNode = async (parentId, statement) => {
     console.log('Text content received:', textContent);
     const viewport = page.getViewport({ scale: 1.0 });
     
-    // Group text items by their vertical position (lines)
     const lines = textContent.items.reduce((acc, item) => {
-      // More precise y-coordinate calculation
       const y = Math.round((viewport.height - item.transform[5]) * 100) / 100;
       if (!acc[y]) {
         acc[y] = [];
@@ -1715,271 +1330,135 @@ const handleCreateParagraphNode = async (parentId, statement) => {
       return acc;
     }, {});
 
-    // Sort lines by vertical position and items within lines by horizontal position
     const sortedLines = Object.entries(lines)
-      .sort(([y1], [y2]) => Number(y1) - Number(y2))
+      .sort(([y1], [y2]) => parseFloat(y1) - parseFloat(y2))
       .map(([yPos, items]) => ({
-        y: Number(yPos),
-        items: items.sort((a, b) => a.x - b.x)
+        y: parseFloat(yPos),
+        text: items.sort((a, b) => a.x - b.x).map(item => item.text).join(' '),
+        items: items.sort((a, b) => a.x - b.x) 
       }));
 
-    // Process the sorted lines into text content
     return {
-      number: pageNum,
-      content: sortedLines.map(line => {
-        const text = line.items.map(item => item.text).join('');
-        if (!text.trim()) return null; // Skip empty lines
-        
-        const firstItem = line.items[0];
+      pageNum,
+      lines: sortedLines.map(line => {
         const style = {
-          fontSize: `${Math.round(firstItem.fontSize)}px`,
-          fontFamily: firstItem.fontFamily.replace('+', ' '),
-          marginLeft: `${Math.round(firstItem.x / viewport.width * 100)}%`,
-          fontWeight: firstItem.bold ? 'bold' : 'normal',
-          fontStyle: firstItem.italic ? 'italic' : 'normal',
-          position: 'relative',
-          display: 'block'
+          fontWeight: line.items[0]?.bold ? 'bold' : 'normal',
+          fontStyle: line.items[0]?.italic ? 'italic' : 'normal',
+          fontSize: `${line.items[0]?.fontSize || 10}px`, 
         };
-
         return {
-          text,
-          style
+          text: line.text,
+          style: style,
+          rawItems: line.items 
         };
-      }).filter(Boolean) // Remove null entries (empty lines)
+      })
     };
   };
 
-  const handleFileUpload = useCallback(async (event) => {
-    const file = event.target.files[0];
-    if (!file || file.type !== 'application/pdf') {
-      alert('Please select a valid PDF file');
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      console.log('Loading PDF...');
-      const loadingTask = pdfjsLib.getDocument(arrayBuffer);
-      const pdf = await loadingTask.promise;
-      console.log('PDF loaded successfully:', { numPages: pdf.numPages });
-      
-      // Extract metadata
-      const metadata = await pdf.getMetadata().catch(() => ({ info: {} }));
-      const title = metadata?.info?.Title || file.name;
-      const author = metadata?.info?.Author || 'Unknown';
-      const localPath = URL.createObjectURL(file);
-
-      // Check if paper already exists
-      const existingPaper = await executeQuery(
-        `
-        MATCH (p:Paper)
-        WHERE p.title = $title OR p.localPath = $localPath
-        RETURN ID(p) as paperId, p.title as title, p.author as author, p.localPath as localPath
-        LIMIT 1
-        `,
-        { title, localPath }
-      );
-
-      let paperId;
-      if (existingPaper.length > 0) {
-        // Use existing paper
-        const paper = existingPaper[0];
-        paperId = paper.get('paperId').toNumber();
-        const existingTitle = paper.get('title');
-        const existingAuthor = paper.get('author');
-        console.log('Using existing paper:', { existingTitle, existingAuthor });
+  const handleExportRtfFromMenu = () => {
+    const centralTopicNode = nodes.find(node => node.type === 'centralTopicNode');
+    if (centralTopicNode && centralTopicNode.data && centralTopicNode.data.rawElementId) {
+      console.log('Exporting RTF from menu for Central Topic:', {
+        nodeId: centralTopicNode.id,
+        elementId: centralTopicNode.data.rawElementId,
+        type: centralTopicNode.type,
+        nodeData: centralTopicNode.data
+      });
+      exportGraphToRtf(centralTopicNode.data.rawElementId);
+    } else {
+      const topicNode = nodes.find(node => node.type === 'topicNode');
+      if (topicNode && topicNode.data && topicNode.data.rawElementId) {
+        console.log('No CentralTopic found. Exporting RTF from menu for Topic:', {
+          nodeId: topicNode.id,
+          elementId: topicNode.data.rawElementId,
+          type: topicNode.type,
+          nodeData: topicNode.data
+        });
+        exportGraphToRtf(topicNode.data.rawElementId);
       } else {
-        // Create new paper
-        const result = await executeQuery(
-          `
-          CREATE (p:Paper {
-            title: $title,
-            author: $author,
-            localPath: $localPath,
-            uploadedAt: datetime()
-          })
-          RETURN ID(p) as paperId
-          `,
-          { title, author, localPath }
-        );
-        paperId = result[0].get('paperId').toNumber();
-        console.log('Created new paper:', { title, author });
+        alert('No Central Topic or Topic found to export. Please ensure a graph is loaded.');
+        console.error('No CentralTopic or Topic node found with rawElementId to initiate RTF export from menu.');
       }
-      setCurrentPaperId(paperId);
-      setCurrentPaperTitle(title);
-
-      // Fetch all references for this paper
-      const references = await executeQuery(
-        `
-        MATCH (p:Paper)-[:HAS_REFERENCE]->(r:ReferencedText)
-        WHERE ID(p) = $paperId
-        RETURN ID(r) as refId, r.text as text
-        `,
-        { paperId }
-      );
-
-      // Create nodes for paper and its references
-      const paperNode = {
-        id: `paper-${paperId}`,
-        type: 'paperNode',
-        position: { x: 250, y: 250 },
-        data: { label: title }
-      };
-
-      const referenceNodes = references.map(ref => {
-        const refId = ref.get('refId').toNumber();
-        const text = ref.get('text');
-        return {
-          id: `ref-${refId}`,
-          type: 'referenceNode',
-          position: getRandomPosition(),
-          data: {
-            label: text.substring(0, 30) + (text.length > 30 ? '...' : ''),
-            fullText: text
-          }
-        };
-      });
-
-      const edges = references.map(ref => {
-        const refId = ref.get('refId').toNumber();
-        return {
-          id: `edge-paper-${paperId}-ref-${refId}-${Date.now()}-${Math.random()}`,
-          source: `paper-${paperId}`,
-          target: `ref-${refId}`,
-          type: 'default',
-          animated: true
-        };
-      });
-
-      // Update graph
-      // Preserve existing nodes and edges, only add new ones
-      setNodes(prevNodes => {
-        const existingNodeIds = new Set(prevNodes.map(n => n.id));
-        const newNodes = [paperNode, ...referenceNodes].filter(node => !existingNodeIds.has(node.id));
-        return [...prevNodes, ...newNodes];
-      });
-      
-      setEdges(prevEdges => {
-        const existingEdgeIds = new Set(prevEdges.map(e => e.id));
-        const newEdges = edges.filter(edge => !existingEdgeIds.has(edge.id));
-        return [...prevEdges, ...newEdges];
-      });
-
-      // Process PDF pages
-      const pages = [];
-      console.log('Processing PDF pages...');
-      for (let i = 1; i <= pdf.numPages; i++) {
-        console.log(`Processing page ${i}...`);
-        const page = await pdf.getPage(i);
-        const processedPage = await processPdfPage(page, i);
-        console.log(`Page ${i} processed:`, processedPage);
-        pages.push(processedPage);
-      }
-
-      console.log('Setting PDF content...');
-      setPdfContent({ pages });
-    } catch (error) {
-      console.error('Error processing PDF:', error);
-      setPdfContent({ pages: [] });
-      setCurrentPaperId(null);
-      setCurrentPaperTitle('');
-    } finally {
-      setIsLoading(false);
     }
-  }, []);
+  };
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden">
+    <div className="flex flex-col h-screen bg-gray-100">
       <Header
         dbStatus={dbStatus}
         onFileUpload={handleFileUpload}
         onNewTopic={() => {
-          setParentForNewTopic(null); // Ensure we are creating an orphan topic
+          setParentForNewTopic(null); 
           setShowTopicPopup(true);
         }}
         onNewCentralTopic={() => setShowCentralTopicPopup(true)}
+        onNewParagraph={() => {
+          setParentForNewParagraph(null); 
+          setShowParagraphPopup(true);
+        }}
         showImportantPapers={showImportantPapers}
         onToggleImportantPapers={() => setShowImportantPapers(!showImportantPapers)}
+        onExportRtf={handleExportRtfFromMenu} 
       />
-      <div className="flex-1 flex mt-16 w-full">
+      <div className="flex flex-grow pt-16"> {/* pt-16 to offset fixed header */}
         {/* Left Workspace */}
         <div
           ref={leftWorkspaceRef}
-          className="workspace p-6 bg-gray-50"
+          className="workspace p-6 overflow-y-auto bg-white border-r border-gray-300"
           style={{ width: `${leftWidth}%` }}
-          onMouseUp={handleTextSelection}
+          onMouseUp={handleTextSelection} 
         >
           <h2 className="text-xl font-semibold mb-4 text-gray-800">
-            PDF Content
-            {currentPaperTitle && (
-              <span className="ml-2 text-base font-normal text-gray-600">
-                - {currentPaperTitle}
-              </span>
-            )}
+            {pdfContent.title || 'PDF Viewer'}
           </h2>
-          <div className="bg-white p-8 rounded-lg shadow-sm max-h-[calc(100vh-10rem)] overflow-auto min-w-[600px]">
-            {isLoading ? (
-              <div className="flex items-center justify-center text-gray-600">
-                <div className="animate-pulse">Loading PDF content...</div>
+          {pdfContent.pages.length > 0 ? (
+            pdfContent.pages.map((page, pageIndex) => (
+              <div key={`page-${pageIndex}`} className="mb-8 pdf-page">
+                <h3 className="text-lg font-medium mb-2 border-b pb-1">Page {page.pageNum}</h3>
+                {page.lines.map((line, lineIndex) => (
+                  <p
+                    key={`line-${pageIndex}-${lineIndex}`}
+                    style={{
+                      fontSize: line.style.fontSize,
+                      fontWeight: line.style.fontWeight,
+                      fontStyle: line.style.fontStyle,
+                      marginBottom: '0.2em', 
+                      whiteSpace: 'pre-wrap' 
+                    }}
+                  >
+                    {line.text}
+                  </p>
+                ))}
               </div>
-            ) : (
-              <div className="pdf-content mx-auto whitespace-pre-wrap min-w-[500px]">
-                {pdfContent.pages.length === 0 ? (
-                  <p>Select a PDF file to view its content here</p>
-                ) : (
-                  pdfContent.pages.map((page) => (
-                    <div key={page.number} className="pdf-page">
-                      <div className="pdf-heading-2 pdf-text-center mb-4">
-                        Page {page.number}
-                      </div>
-                      {page.content.map((line, idx) => (
-                        <div
-                          key={idx}
-                          className="pdf-paragraph"
-                          style={{
-                            ...line.style,
-                            whiteSpace: 'pre-wrap',
-                            marginBottom: '0.25em',
-                            lineHeight: '1.5',
-                            minHeight: '1.5em'
-                          }}
-                        >
-                          {line.text}
-                        </div>
-                      ))}
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
+            ))
+          ) : (
+            <p className="text-gray-500">Select a PDF file to view its content.</p>
+          )}
+          {/* PDF Text Selection Context Menu */}
+          {showContextMenu && selectedText && (
+            <div
+              className="fixed z-50 bg-white rounded-lg shadow-lg border border-gray-200 py-1 context-menu-pdf"
+              style={{
+                left: `${contextMenuPosition.x}px`,
+                top: `${contextMenuPosition.y}px`,
+                transform: 'translate(-50%, 8px)' 
+              }}
+            >
+              <button
+                onClick={() => handleContextMenuAction('mark')}
+                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900"
+              >
+                Mark
+              </button>
+              <button
+                onClick={() => handleContextMenuAction('reference')}
+                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 border-t border-gray-200"
+              >
+                Reference
+              </button>
+            </div>
+          )}
         </div>
-
-        {/* Context Menu */}
-        {showContextMenu && (
-          <div 
-            className="fixed z-50 bg-white rounded-lg shadow-lg border border-gray-200"
-            style={{
-              left: `${contextMenuPosition.x}px`,
-              top: `${contextMenuPosition.y}px`,
-              transform: 'translate(-50%, 8px)'
-            }}
-          >
-            <button
-              onClick={() => handleContextMenuAction('mark')}
-              className="block w-full text-left px-4 py-2 hover:bg-gray-100"
-            >
-              Mark
-            </button>
-            <button
-              onClick={() => handleContextMenuAction('reference')}
-              className="block w-full text-left px-4 py-2 hover:bg-gray-100 border-t border-gray-200"
-            >
-              Reference
-            </button>
-          </div>
-        )}
 
         {/* Node Context Menu */}
         {showNodeContextMenu && contextNodeForMenu && (
@@ -2012,8 +1491,7 @@ const handleCreateParagraphNode = async (parentId, statement) => {
                 </button>
               </>
             )}
-            {/* Add more conditions for other node types and actions, e.g., delete */}
-            {(contextNodeForMenu.type === 'paperNode' || contextNodeForMenu.type === 'topicNode' || contextNodeForMenu.type === 'paragraphNode' || contextNodeForMenu.type === 'referenceNode' || contextNodeForMenu.type === 'centralTopicNode') && ( // Adjust deletable types as needed
+            {(contextNodeForMenu.type === 'paperNode' || contextNodeForMenu.type === 'topicNode' || contextNodeForMenu.type === 'paragraphNode' || contextNodeForMenu.type === 'referenceNode' || contextNodeForMenu.type === 'centralTopicNode') && ( 
               <button
                 onClick={() => handleNodeContextMenuAction('deleteNode')}
                 className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 hover:text-red-700 border-t border-gray-200 mt-1 pt-1"
@@ -2031,7 +1509,7 @@ const handleCreateParagraphNode = async (parentId, statement) => {
             setIsDragging(true);
             dragRef.current = {
               startX: e.clientX,
-              startWidth: leftWidth
+              startWidthPx: leftWorkspaceRef.current.offsetWidth 
             };
           }}
         />
@@ -2062,23 +1540,19 @@ const handleCreateParagraphNode = async (parentId, statement) => {
               selectNodesOnDrag={false}
               onNodeDoubleClick={(_, node) => setEditNode(node)}
               onNodesChange={async (changes) => {
-                // Handle node deletions first
                 const deletedNodes = changes.filter(change => change.type === 'remove');
                 for (const node of deletedNodes) {
                   try {
-                    // Extract node type and ID
                     const parts = node.id.split('-');
                     const nodeId = parts[parts.length - 1];
                     const nodeType = parts.slice(0, -1).join('-');
                     
-                    // Determine Neo4j label
                     const label = nodeType === 'paper' ? 'Paper' :
                                 nodeType === 'topic' ? 'Topic' :
                                 nodeType === 'central-topic' ? 'CentralTopic' :
                                 nodeType === 'ref' ? 'ReferencedText' : null;
                     
                     if (label) {
-                      // Delete the node and all its relationships
                       await executeQuery(
                         `
                         MATCH (n:${label})
@@ -2093,7 +1567,6 @@ const handleCreateParagraphNode = async (parentId, statement) => {
                   }
                 }
 
-                // Apply changes to the visual nodes while preserving selection and type-specific styles
                 setNodes((nds) => {
                   const updatedNodes = applyNodeChanges(changes, nds);
                   return updatedNodes.map(node => ({
@@ -2110,13 +1583,11 @@ const handleCreateParagraphNode = async (parentId, statement) => {
                   }));
                 });
                 
-                // Update positions in Neo4j for moved nodes
                 const positionChanges = changes.filter(change =>
                   change.type === 'position' && change.position
                 );
                 
                 for (const change of positionChanges) {
-                  // Handle special case for central-topic which contains a hyphen
                   const parts = change.id.split('-');
                   const nodeId = parts[parts.length - 1];
                   const nodeType = parts.slice(0, -1).join('-');
@@ -2126,24 +1597,21 @@ const handleCreateParagraphNode = async (parentId, statement) => {
                               nodeType === 'ref' ? 'ReferencedText' :
                               nodeType === 'paragraph' ? 'Paragraph' : null;
                   
-                  // Log position update for debugging
                   console.log('Updating position for:', { nodeType, nodeId, label, position: change.position });
                   
                   if (label) {
                     try {
-                      // const existingNode = nodes.find(n => n.id === change.id); // Not strictly needed for position-only update
                       await executeQuery(
                         `
                         MATCH (n:${label})
                         WHERE ID(n) = $nodeId
                         SET n.positionX = $positionX,
                             n.positionY = $positionY
-                        `, // Simplified: only update position on drag
+                        `, 
                         {
                           nodeId: parseInt(nodeId),
                           positionX: change.position.x,
                           positionY: change.position.y,
-                          // Removed paper-specific importance/notes from drag update
                         }
                       );
                     } catch (error) {
@@ -2153,18 +1621,15 @@ const handleCreateParagraphNode = async (parentId, statement) => {
                 }
               }}
               onEdgesChange={async (changes) => {
-                // Handle edge deletions
                 const deletedEdges = changes.filter(change => change.type === 'remove');
                 for (const edge of deletedEdges) {
                   try {
-                    // Extract IDs and types from edge ID (format: edge-type-id-type-id-timestamp)
                     const parts = edge.id.split('-');
                     const sourceType = parts[1];
                     const sourceId = parts[2];
                     const targetType = parts[3];
                     const targetId = parts[4];
 
-                    // Map types to Neo4j labels
                     const sourceLabel = sourceType === 'paper' ? 'Paper' :
                                       sourceType === 'topic' ? 'Topic' :
                                       sourceType === 'central-topic' ? 'CentralTopic' :
@@ -2176,7 +1641,6 @@ const handleCreateParagraphNode = async (parentId, statement) => {
                                       targetType === 'ref' ? 'ReferencedText' : null;
 
                     if (sourceLabel && targetLabel) {
-                      // Delete any relationship between these nodes
                       await executeQuery(
                         `
                         MATCH (source:${sourceLabel})-[r]-(target:${targetLabel})
@@ -2194,17 +1658,18 @@ const handleCreateParagraphNode = async (parentId, statement) => {
               }}
               onConnect={async (params) => {
                 try {
-let relationshipType = 'RELATES_TO'; // Default relationship type
                   const sourceNode = nodes.find(n => n.id === params.source);
                   const targetNode = nodes.find(n => n.id === params.target);
-                  
+
+                  console.log('[onConnect] PARAMS:', JSON.stringify(params, null, 2));
+                  console.log('[onConnect] sourceNode:', JSON.stringify(sourceNode, null, 2));
+                  console.log('[onConnect] targetNode:', JSON.stringify(targetNode, null, 2));
+
                   if (!sourceNode || !targetNode) {
                     console.error('Source or target node not found');
                     return;
                   }
 
-                  // Extract IDs from node IDs
-                  // Handle special case for central-topic which contains a hyphen
                   const sourceParts = params.source.split('-');
                   const sourceId = sourceParts[sourceParts.length - 1];
                   const sourceType = sourceParts.slice(0, -1).join('-');
@@ -2215,150 +1680,99 @@ let relationshipType = 'RELATES_TO'; // Default relationship type
 
                   console.log('Connection attempt:', { sourceType, sourceId, targetType, targetId });
 
-                  // Validate connection types
                   if (sourceNode.type === 'referenceNode') {
                     alert('Invalid connection: References cannot be source nodes');
                     return;
                   }
 
-                  // Log connection attempt details
-                  console.log('Creating connection:', {
-                    source: { type: sourceNode.type, id: sourceId },
-                    target: { type: targetNode.type, id: targetId }
-                  });
+                  let relationshipType = 'RELATES_TO';
+                  let sourceLabel = '';
+                  let targetLabel = '';
+                  console.log('[onConnect] Initial check: sourceNode.type:', sourceNode.type, 'targetNode.type:', targetNode.type);
 
-                  // Create relationship in Neo4j based on node types
-                  let query = '';
-
-                  if (sourceNode.type === 'centralTopicNode' && targetNode.type === 'referenceNode') {
-                    query = `
-                      MATCH (ct:CentralTopic), (r:ReferencedText)
-                      WHERE ID(ct) = $sourceId AND ID(r) = $targetId
-                      CREATE (ct)-[rel:HAS_REFERENCE]->(r)
-                    `;
-                  } else if ((sourceNode.type === 'paperNode' || sourceNode.type === 'topicNode') && targetNode.type === 'referenceNode') {
-                    const sourceLabel = sourceNode.type === 'paperNode' ? 'Paper' : 'Topic';
-                    query = `
-                      MATCH (source:${sourceLabel}), (r:ReferencedText)
-                      WHERE ID(source) = $sourceId AND ID(r) = $targetId
-                      CREATE (source)-[rel:HAS_REFERENCE]->(r)
-                    `;
+                  // Determine relationship type and labels based on node types
+                  if (sourceNode.type === 'centralTopicNode' && targetNode.type === 'topicNode') {
+                    relationshipType = 'HAS_TOPIC';
+                    sourceLabel = 'CentralTopic';
+                    targetLabel = 'Topic';
+                    console.log('[onConnect] Determined labels and type (centralTopicNode -> topicNode):', { sourceLabel, targetLabel, relationshipType });
+                  } else if (sourceNode.type === 'topicNode' && targetNode.type === 'topicNode') {
+                    relationshipType = 'HAS_TOPIC';
+                    sourceLabel = 'Topic';
+                    targetLabel = 'Topic';
+                    console.log('[onConnect] Determined labels and type (topicNode -> topicNode):', { sourceLabel, targetLabel, relationshipType });
+                  } else if (sourceNode.type === 'topicNode' && targetNode.type === 'paragraphNode') {
+                    relationshipType = 'HAS_PARAGRAPH';
+                    sourceLabel = 'Topic';
+                    targetLabel = 'Paragraph';
+                    console.log('[onConnect] Determined labels and type (topicNode -> paragraphNode):', { sourceLabel, targetLabel, relationshipType });
                   } else if (sourceNode.type === 'paragraphNode' && targetNode.type === 'referenceNode') {
                     relationshipType = 'CITES';
-                    query = `
-                      MATCH (p:Paragraph), (r:ReferencedText)
-                      WHERE ID(p) = $sourceId AND ID(r) = $targetId
-                      MERGE (p)-[rel:CITES]->(r)
-                      ON CREATE SET rel.createdAt = datetime()
-                      RETURN type(rel) as createdRelationshipType
-                    `;
-                  } else if (targetNode.type === 'topicNode' || targetNode.type === 'paragraphNode') {
-                    // Handle connections to topics or paragraphs
-                    const sourceLabel = sourceNode.type === 'centralTopicNode' ? 'CentralTopic' :
-                                     sourceNode.type === 'paperNode' ? 'Paper' :
-                                     sourceNode.type === 'topicNode' ? 'Topic' : 'Paragraph'; // Assuming Paragraph can also be a source
-                    const targetLabel = targetNode.type === 'topicNode' ? 'Topic' : 'Paragraph';
-                    relationshipType = targetNode.type === 'topicNode' ? 'HAS_TOPIC' : 'HAS_PARAGRAPH';
-                    query = `
-                      MATCH (source:${sourceLabel}), (target:${targetLabel})
-                      WHERE ID(source) = $sourceId AND ID(target) = $targetId
-                      
-                      // Ensure the relationship exists or create it
-                      MERGE (source)-[r:${relationshipType}]->(target)
-                        ON CREATE SET r.createdAt = datetime()
+                    sourceLabel = 'Paragraph';
+                    targetLabel = 'ReferencedText';
+                    console.log('[onConnect] Determined labels and type (paragraphNode -> referenceNode):', { sourceLabel, targetLabel, relationshipType });
+                  } else if ((sourceNode.type === 'centralTopicNode' || sourceNode.type === 'paperNode' || sourceNode.type === 'topicNode') && targetNode.type === 'referenceNode') {
+                     relationshipType = 'HAS_REFERENCE';
+                     sourceLabel = sourceNode.type === 'centralTopicNode' ? 'CentralTopic' : sourceNode.type === 'paperNode' ? 'Paper' : 'Topic';
+                     targetLabel = 'ReferencedText';
+                     console.log('[onConnect] Determined labels and type (various -> referenceNode):', { sourceLabel, targetLabel, relationshipType });
+                  }
+                   // Add other specific connection types as needed
 
-                      // After ensuring the relationship, count other children of the source
-                      WITH source, target
-                      OPTIONAL MATCH (source)-[:${relationshipType}]->(otherChild:${targetLabel})
-                      WHERE otherChild <> target // Exclude the target itself from the count
-                      WITH target, COUNT(otherChild) AS numOtherSiblings
-                      
-                      // Set the siblingOrder for the target node
-                      SET target.siblingOrder = numOtherSiblings + 1
-                      RETURN target.siblingOrder AS newSiblingOrder
-                    `;
-                  } else if (sourceNode.type === 'topicNode' || sourceNode.type === 'paragraphNode') {
-                     // Handle connections from topics or paragraphs (e.g., to Paper, CentralTopic)
-                     // These typically don't involve siblingOrder for the target
-                     const sourceLabel = sourceNode.type === 'topicNode' ? 'Topic' : 'Paragraph';
-                     const targetLabel = targetNode.type === 'centralTopicNode' ? 'CentralTopic' :
-                                      targetNode.type === 'paperNode' ? 'Paper' :
-                                      targetNode.type === 'topicNode' ? 'Topic' : 'Paragraph'; // Avoid self-loops or define specific logic
-                     // Determine a generic relationship type or specific based on source/target
-                     if (sourceLabel === 'Paragraph' && targetLabel === 'Topic') {
-                        relationshipType = 'RELATES_TO_TOPIC';
-                     } else if (sourceLabel === 'Topic' && targetLabel === 'Paragraph') {
-                        relationshipType = 'HAS_PARAGRAPH_REFERENCE'; // Example, can be more generic
-                     } else if (sourceLabel === 'Paragraph' && targetLabel === 'Paragraph') {
-                        relationshipType = 'RELATES_TO_PARAGRAPH'; // Example for Para->Para
-                     } else {
-                        relationshipType = 'RELATES_TO'; // Default generic
-                     }
-                     query = `
-                       MATCH (source:${sourceLabel}), (target:${targetLabel})
-                       WHERE ID(source) = $sourceId AND ID(target) = $targetId
-                       MERGE (source)-[r:${relationshipType}]->(target)
-                     `;
-                  } else {
+                  if (!sourceLabel || !targetLabel) {
+                     console.error('[onConnect] UNHANDLED CONNECTION:', { sourceNodeType: sourceNode.type, targetNodeType: targetNode.type });
                      console.warn(`Unhandled connection type: ${sourceNode.type} -> ${targetNode.type}`);
-                     query = ''; // Prevent execution for unhandled types
+                     alert(`Cannot create connection between ${sourceNode.type} and ${targetNode.type}`);
+                     return;
                   }
 
 
-                  // Log query for debugging
-                  console.log('Executing query:', query);
+                  console.log('Creating connection:', {
+                    source: { type: sourceNode.type, id: sourceId, label: sourceLabel },
+                    target: { type: targetNode.type, id: targetId, label: targetLabel },
+                    relationshipType: relationshipType
+                  });
 
-                  if (query) {
-                    // Execute the query
-                    const result = await executeQuery(query, {
-                      sourceId: parseInt(sourceId),
-                      targetId: parseInt(targetId)
-                    });
+                  // Create relationship in Neo4j (simplified query)
+                  const query = `
+                    MATCH (source:${sourceLabel})
+                    WHERE ID(source) = $sourceId
+                    MATCH (target:${targetLabel})
+                    WHERE ID(target) = $targetId
+                    MERGE (source)-[r:${relationshipType}]->(target)
+                    RETURN type(r) as createdRelationshipType
+                  `;
+                  console.log('[onConnect] Neo4j Query:', query);
+                  console.log('[onConnect] Neo4j Params:', JSON.stringify({ sourceId: parseInt(sourceId), targetId: parseInt(targetId) }, null, 2));
 
-                    let newSiblingOrder = null;
-                    // Check if the query returned a new sibling order (for HAS_TOPIC or HAS_PARAGRAPH)
-                    if ((relationshipType === 'HAS_TOPIC' || relationshipType === 'HAS_PARAGRAPH') && result && result.length > 0) {
-                       newSiblingOrder = result[0].get('newSiblingOrder')?.toNumber();
-                       if (newSiblingOrder !== null && newSiblingOrder !== undefined) {
-                         console.log(`Assigned new siblingOrder: ${newSiblingOrder} to node ${targetNode.id}`);
-                       }
-                    }
+                  const result = await executeQuery(query, {
+                    sourceId: parseInt(sourceId),
+                    targetId: parseInt(targetId)
+                  });
 
-                    // Create and add visual edge
-                    const newEdge = {
-                      id: (relationshipType === 'CITES') ? `e-${params.source}-${params.target}-${relationshipType}` : `edge-${sourceType}-${sourceId}-${targetType}-${targetId}-${relationshipType}-${Date.now()}-${Math.random()}`,
-                      source: params.source,
-                      target: params.target,
-                      type: (relationshipType === 'CITES') ? 'simpleFloatingEdge' : 'floating', // Use simpleFloatingEdge for CITES
-                      label: relationshipType,
-                      animated: true,
-                      markerEnd: { type: MarkerType.ArrowClosed },
-                    };
+                  console.log('[onConnect] Neo4j Result:', JSON.stringify(result, null, 2));
 
-                    // Log edge creation
-                    console.log('Adding edge:', newEdge);
-                    
-                    const finalEdges = addEdge(newEdge, edges);
-                    setEdges(finalEdges);
+                  // Add visual edge
+                  const newEdge = {
+                    id: `edge-${sourceType}-${sourceId}-${targetType}-${targetId}-${relationshipType}-${Date.now()}-${Math.random()}`,
+                    source: params.source,
+                    target: params.target,
+                    type: (relationshipType === 'CITES') ? 'simpleFloatingEdge' : 'floating',
+                    label: relationshipType,
+                    animated: true,
+                    markerEnd: { type: MarkerType.ArrowClosed },
+                  };
 
-                    // Update the target node's siblingOrder and recalculate display numbers
-                    if ((targetNode.type === 'topicNode' || targetNode.type === 'paragraphNode') && newSiblingOrder !== null && newSiblingOrder !== undefined) {
-                      setNodes(prevNodes => {
-                        const nodesWithUpdatedSiblingOrder = prevNodes.map(n =>
-                          n.id === targetNode.id
-                            ? { ...n, data: { ...n.data, siblingOrder: newSiblingOrder } }
-                            : n
-                        );
-                        console.log(`Updating client state for node ${targetNode.id} (type: ${targetNode.type}) with siblingOrder: ${newSiblingOrder}`);
-                        return calculateDisplayNumbers(nodesWithUpdatedSiblingOrder, finalEdges);
-                      });
-                    } else {
-                      // Even if no siblingOrder update for this specific node,
-                      // adding an edge might affect overall structure, so recalculate.
-                      console.log(`No specific siblingOrder update for target ${targetNode.id} (type: ${targetNode.type}), but recalculating numbers due to new edge.`);
-                      setNodes(prevNodes => calculateDisplayNumbers(prevNodes, finalEdges));
-                    }
-} // End of if(query) block
+                  console.log('[onConnect] Adding visual edge:', JSON.stringify(newEdge, null, 2));
+
+                  const finalEdges = addEdge(newEdge, edges);
+                  setEdges(finalEdges);
+
+                  // Recalculate display numbers after adding edge
+                  // The calculateDisplayNumbers function handles siblingOrder based on the graph structure
+                  setNodes(prevNodes => calculateDisplayNumbers(prevNodes, finalEdges));
+
+
                 } catch (error) {
                   console.error('Error creating connection:', error);
                   alert('Failed to create connection. Please try again.');
@@ -2426,12 +1840,11 @@ let relationshipType = 'RELATES_TO'; // Default relationship type
                   if (parentForNewTopic) {
                     await handleCreateTopicNode(parentForNewTopic, newTopicName.trim());
                   } else {
-                    // Create an orphan topic if no parent is set
                     await handleCreateTopicNode(null, newTopicName.trim());
                   }
                   setShowTopicPopup(false);
                   setNewTopicName('');
-                  setParentForNewTopic(null); // Reset parent
+                  setParentForNewTopic(null); 
                 }}
                 className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
               >
@@ -2505,7 +1918,7 @@ let relationshipType = 'RELATES_TO'; // Default relationship type
                 onClick={() => {
                   setShowParagraphPopup(false);
                   setNewParagraphStatement('');
-                  setParentForNewParagraph(null); // Reset parent
+                  setParentForNewParagraph(null); 
                 }}
                 className="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
               >
@@ -2518,7 +1931,6 @@ let relationshipType = 'RELATES_TO'; // Default relationship type
                     return;
                   }
                   await handleCreateParagraphNode(parentForNewParagraph, newParagraphStatement.trim());
-                  // State clearing is done inside handleCreateParagraphNode
                 }}
                 className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
               >
