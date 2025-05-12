@@ -1620,7 +1620,7 @@ function App() {
                   const label = nodeType === 'paper' ? 'Paper' :
                               nodeType === 'topic' ? 'Topic' :
                               nodeType === 'central-topic' ? 'CentralTopic' :
-                              nodeType === 'ref' ? 'ReferencedText' :
+                              nodeType === 'referenceNode' ? 'ReferencedText' :
                               nodeType === 'paragraph' ? 'Paragraph' : null;
                   
                   console.log('Updating position for:', { nodeType, nodeId, label, position: change.position });
