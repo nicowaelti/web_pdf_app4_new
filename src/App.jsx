@@ -1104,16 +1104,18 @@ function App() {
       try {
         // First check if paper with same title exists
         const existingPaper = await executeQuery(
-          'MATCH (p:Paper {title: $title}) RETURN p',
+          'MATCH (p:Paper {title: $title}) RETURN ID(p) as id',
           { title: file.name }
         );
 
         if (existingPaper.length > 0) {
-          alert('A paper with this title already exists in the database.');
+          // Use the existing paper's ID
+          const existingId = existingPaper[0].get('id').toNumber();
+          setCurrentPaperId(existingId);
           return;
         }
 
-        // If no duplicate found, create the new paper
+        // If no duplicate found, create the new paper with the original title
         const result = await executeQuery(
           'CREATE (p:Paper {title: $title, author: $author, uploadedAt: datetime(), positionX: $positionX, positionY: $positionY, localPath: $localPath}) RETURN ID(p) as id, elementId(p) as elementId',
           {
@@ -1151,24 +1153,39 @@ function App() {
   };
 
   useEffect(() => {
-    const handleGlobalMouseUp = () => {
-      if (leftWorkspaceRef.current) {
-        leftWorkspaceRef.current.removeEventListener('mousemove', handleTextSelection);
+    const handleContextMenu = (event) => {
+      if (leftWorkspaceRef.current && leftWorkspaceRef.current.contains(event.target)) {
+        event.preventDefault();
+        const selection = window.getSelection();
+        const text = selection.toString().trim();
+        
+        if (text) {
+          setSelectedText(text);
+          setContextMenuPosition({
+            x: event.clientX,
+            y: event.clientY
+          });
+          setShowContextMenu(true);
+        }
+      } else {
+        setShowContextMenu(false);
       }
     };
 
-    if (leftWorkspaceRef.current) {
-      leftWorkspaceRef.current.addEventListener('mouseup', handleTextSelection);
-      document.addEventListener('mouseup', handleGlobalMouseUp);
-    }
+    const handleClickOutside = (event) => {
+      if (!event.target.closest('.context-menu-pdf')) {
+        setShowContextMenu(false);
+      }
+    };
+
+    document.addEventListener('contextmenu', handleContextMenu);
+    document.addEventListener('click', handleClickOutside);
 
     return () => {
-      if (leftWorkspaceRef.current) {
-        leftWorkspaceRef.current.removeEventListener('mouseup', handleTextSelection);
-      }
-      document.removeEventListener('mouseup', handleGlobalMouseUp);
+      document.removeEventListener('contextmenu', handleContextMenu);
+      document.removeEventListener('click', handleClickOutside);
     };
-  }, [pdfContent]); 
+  }, [pdfContent]);
 
   useEffect(() => {
     const handleKeyDown = async (event) => {
@@ -1210,34 +1227,8 @@ function App() {
     };
   }, [isDragging]);
 
-  const handleTextSelection = () => {
-    const selection = window.getSelection();
-    const text = selection.toString().trim();
-    
-    if (text && selection.rangeCount > 0) {
-      const range = selection.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      const workspaceRect = leftWorkspaceRef.current.getBoundingClientRect();
-      
-      if (rect.left >= workspaceRect.left && rect.right <= workspaceRect.right) {
-        setSelectedText(text);
-        setContextMenuPosition({
-          x: rect.left + rect.width / 2,
-          y: rect.bottom
-        });
-        setShowContextMenu(true);
-      }
-    } else {
-      setShowContextMenu(false);
-    }
-  };
 
   const handleContextMenuAction = async (action) => {
-    if (!currentPaperId) {
-      alert('Please load a PDF document first');
-      setShowContextMenu(false);
-      return;
-    }
 
     try {
       if (action === 'mark') {
@@ -1281,8 +1272,17 @@ function App() {
           }
         );
         
-        const refId = result[0].get('refId').toNumber();
-        const refElementId = result[0].get('elementId');
+        if (!result || result.length === 0) {
+          throw new Error('Failed to create reference: No result returned from database');
+        }
+        
+        const record = result[0];
+        if (!record || !record.get('refId')) {
+          throw new Error('Failed to create reference: Invalid result structure');
+        }
+        
+        const refId = record.get('refId').toNumber();
+        const refElementId = record.get('elementId');
         const newRefNode = {
           id: `referenceNode-${refId}`, 
           type: 'referenceNode',
@@ -1311,9 +1311,10 @@ function App() {
       }
     } catch (error) {
       console.error('Error saving to Neo4j:', error);
-      alert('Failed to save the selection. Please try again.');
+      alert(error.message || 'Failed to save the selection. Please try again.');
+    } finally {
+      setShowContextMenu(false);
     }
-    setShowContextMenu(false);
   };
 
   const processPdfPage = async (page, pageNum) => {
@@ -1419,7 +1420,6 @@ function App() {
           ref={leftWorkspaceRef}
           className="workspace p-6 overflow-y-auto bg-white border-r border-gray-300"
           style={{ width: `${leftWidth}%` }}
-          onMouseUp={handleTextSelection} 
         >
           <h2 className="text-xl font-semibold mb-4 text-gray-800">
             {pdfContent.title || 'PDF Viewer'}
@@ -1447,24 +1447,37 @@ function App() {
           ) : (
             <p className="text-gray-500">Select a PDF file to view its content.</p>
           )}
-          {/* PDF Text Selection Context Menu */}
+          {/* PDF Context Menu */}
           {showContextMenu && selectedText && (
             <div
               className="fixed z-50 bg-white rounded-lg shadow-lg border border-gray-200 py-1 context-menu-pdf"
               style={{
                 left: `${contextMenuPosition.x}px`,
-                top: `${contextMenuPosition.y}px`,
-                transform: 'translate(-50%, 8px)' 
+                top: `${contextMenuPosition.y}px`
               }}
             >
               <button
-                onClick={() => handleContextMenuAction('mark')}
+                onClick={() => {
+                  if (!currentPaperId || !pdfContent.pages.length) {
+                    alert('Please load a PDF document first');
+                    setShowContextMenu(false);
+                    return;
+                  }
+                  handleContextMenuAction('mark');
+                }}
                 className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900"
               >
                 Mark
               </button>
               <button
-                onClick={() => handleContextMenuAction('reference')}
+                onClick={() => {
+                  if (!currentPaperId || !pdfContent.pages.length) {
+                    alert('Please load a PDF document first');
+                    setShowContextMenu(false);
+                    return;
+                  }
+                  handleContextMenuAction('reference');
+                }}
                 className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 border-t border-gray-200"
               >
                 Reference
