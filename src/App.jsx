@@ -1651,6 +1651,10 @@ function App() {
                 for (const edge of deletedEdges) {
                   try {
                     const parts = edge.id.split('-');
+                    if (parts.length < 6) {
+                      console.error('Invalid edge ID format:', edge.id);
+                      return;
+                    }
                     const sourceType = parts[1];
                     const sourceId = parts[2];
                     const targetType = parts[3];
@@ -1659,17 +1663,23 @@ function App() {
                     const sourceLabel = sourceType === 'paper' ? 'Paper' :
                                       sourceType === 'topic' ? 'Topic' :
                                       sourceType === 'central-topic' ? 'CentralTopic' :
-                                      sourceType === 'ref' ? 'ReferencedText' : null;
+                                      sourceType === 'referenceNode' ? 'ReferencedText' :
+                                      sourceType === 'paragraph' ? 'Paragraph' : null;
 
                     const targetLabel = targetType === 'paper' ? 'Paper' :
                                       targetType === 'topic' ? 'Topic' :
                                       targetType === 'central-topic' ? 'CentralTopic' :
-                                      targetType === 'ref' ? 'ReferencedText' : null;
+                                      targetType === 'referenceNode' ? 'ReferencedText' :
+                                      targetType === 'paragraph' ? 'Paragraph' : null;
 
-                    if (sourceLabel && targetLabel) {
+                    // Extract relationship type from edge ID
+                    const relationshipType = parts[5];
+
+                    if (sourceLabel && targetLabel && relationshipType) {
+                      console.log('Deleting edge:', { sourceLabel, targetLabel, relationshipType, sourceId, targetId });
                       await executeQuery(
                         `
-                        MATCH (source:${sourceLabel})-[r]-(target:${targetLabel})
+                        MATCH (source:${sourceLabel})-[r:${relationshipType}]->(target:${targetLabel})
                         WHERE ID(source) = $sourceId AND ID(target) = $targetId
                         DELETE r
                         `,
