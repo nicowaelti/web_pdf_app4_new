@@ -31,13 +31,17 @@ class GraphDataProcessor {
             MATCH (root) WHERE root.elementId = $rootNodeId OR root.elementId = toString($rootNodeId) OR ID(root) = toInteger(split($rootNodeId, ':')[2])
 
             // Find all nodes reachable from the root via relevant relationships
-            OPTIONAL MATCH path = (root)-[:HAS_TOPIC|HAS_PARAGRAPH|CITES*0..10]->(descendant)
-            WITH root, collect(DISTINCT root) + collect(DISTINCT descendant) AS subgraph_nodes
+            OPTIONAL MATCH path = (root)-[:HAS_TOPIC|HAS_PARAGRAPH|CITES|HAS_REFERENCE*0..10]->(descendant)
+            WITH root, collect(DISTINCT root) + collect(DISTINCT descendant) AS initial_nodes
 
-            // Add any papers linked to referenced texts in the subgraph
-            UNWIND subgraph_nodes AS node
-            OPTIONAL MATCH (paper:Paper)-[:HAS_REFERENCE]->(node) WHERE node:ReferencedText
-            WITH collect(DISTINCT node) + collect(DISTINCT paper) AS all_relevant_nodes_list
+            // Find all referenced texts and their papers
+            UNWIND initial_nodes AS node
+            OPTIONAL MATCH (node)-[:CITES|HAS_REFERENCE]->(ref:ReferencedText)
+            OPTIONAL MATCH (paper:Paper)-[:HAS_REFERENCE]->(ref)
+            WITH initial_nodes, collect(DISTINCT ref) AS refs, collect(DISTINCT paper) AS papers
+
+            // Combine all nodes
+            WITH initial_nodes + refs + papers AS all_relevant_nodes_list
 
             UNWIND all_relevant_nodes_list AS n
             WITH collect(DISTINCT n) AS all_nodes_in_subgraph
@@ -115,22 +119,27 @@ class GraphDataProcessor {
 
                     if (startNode && endNode) {
                         // Add child for hierarchical relationships
-                        if (['HAS_TOPIC', 'HAS_PARAGRAPH'].includes(rel.type)) {
-                             // Check if the child is already added to prevent duplicates
-                             if (!startNode.children.find(child => child.id === endNode.id)) {
+                        if (['HAS_TOPIC', 'HAS_PARAGRAPH'].includes(rel.type) ||
+                            (rel.type === 'CITES' && ['Topic', 'Paragraph'].includes(startNode.type) && endNode.type === 'ReferencedText') ||
+                            (rel.type === 'HAS_REFERENCE' && ['Topic', 'Paragraph'].includes(startNode.type) && endNode.type === 'ReferencedText')) {
+                            // Check if the child is already added to prevent duplicates
+                            if (!startNode.children.find(child => child.id === endNode.id)) {
                                 startNode.children.push(endNode);
-                             }
-                        }
-                        // Handle CITES relationship (Paragraph -> ReferencedText)
-                        if (rel.type === 'CITES' && startNode.type === 'Paragraph' && endNode.type === 'ReferencedText') {
-                             // Ensure ReferencedText is a child of Paragraph for hierarchy
-                             if (!startNode.children.find(child => child.id === endNode.id)) {
-                                startNode.children.push(endNode);
-                             }
+                            }
                         }
                         // Handle HAS_REFERENCE relationship (ReferencedText -> Paper)
-                        if (rel.type === 'HAS_REFERENCE' && startNode.type === 'ReferencedText' && endNode.type === 'Paper') {
-                            startNode.properties.paperTitle = endNode.properties.title || 'Untitled Paper';
+                        // Handle HAS_REFERENCE relationship (Paper -> ReferencedText)
+                        if (rel.type === 'HAS_REFERENCE' && endNode.type === 'ReferencedText' && startNode.type === 'Paper') {
+                            // Store full paper information
+                            if (!endNode.properties.papers) {
+                                endNode.properties.papers = [];
+                            }
+                            endNode.properties.papers.push({
+                                title: startNode.properties.title || 'Untitled Paper',
+                                authors: startNode.properties.authors || [],
+                                year: startNode.properties.year || '',
+                                doi: startNode.properties.doi || ''
+                            });
                         }
                     }
                 });
@@ -219,11 +228,26 @@ class RtfBuilder {
                 break;
             }
             case 'ReferencedText': {
-                currentIndent = ((node.rtfLevel - 2) * baseIndentSize) + (2 * baseIndentSize);
+                // Calculate indent based on parent type (stored in rtfLevel)
+                const parentLevel = node.rtfLevel - 1;
+                currentIndent = (parentLevel * baseIndentSize) + baseIndentSize;
                 const referenceLabel = `Reference ${node.siblingOrder || 1}`;
                 let paperTitleRtf = '';
-                if (node.properties.paperTitle) {
-                    paperTitleRtf = ` (Paper: ${this._escapeRtfText(node.properties.paperTitle)})`;
+                if (node.properties.papers && node.properties.papers.length > 0) {
+                    const paperInfo = node.properties.papers.map(paper => {
+                        let info = `Paper: ${this._escapeRtfText(paper.title)}`;
+                        if (paper.authors && paper.authors.length > 0) {
+                            info += ` by ${this._escapeRtfText(paper.authors.join(', '))}`;
+                        }
+                        if (paper.year) {
+                            info += ` (${this._escapeRtfText(paper.year)})`;
+                        }
+                        if (paper.doi) {
+                            info += ` DOI: ${this._escapeRtfText(paper.doi)}`;
+                        }
+                        return info;
+                    }).join('\\par ' + paragraphFormatting);
+                    paperTitleRtf = `\\par ${paragraphFormatting}${paperInfo}`;
                 }
                 paragraphFormatting += `\\li${currentIndent}\\fs24 `;
                 const multiLineText = (node.textContent || '')
