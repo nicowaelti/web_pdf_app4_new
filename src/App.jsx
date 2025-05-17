@@ -785,7 +785,7 @@ function App() {
 
     switch (action) {
       case 'addParagraph':
-        setParentForNewParagraph(contextNodeForMenu.id);
+        setParentForNewParagraph(contextNodeForMenu);
         setShowParagraphPopup(true);
         break;
       case 'addSubTopic':
